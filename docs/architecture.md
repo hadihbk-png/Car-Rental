@@ -21,7 +21,7 @@ Read with [requirements.md](requirements.md). This file records the decisions ev
 | Area | Owner |
 |---|---|
 | `src/db/**`, `drizzle/**` (migrations), `scripts/seed*`, `scripts/db-*` | Database Engine |
-| Domain services: `src/lib/{reservations,pricing,availability,payments,storage,jobs,auth,log,audit}/**` | Database Engine |
+| Domain services: `src/lib/{reservations,pricing,availability,payments,storage,jobs,auth,log,audit,fleet,drivers}/**`, `src/lib/errors.ts` | Database Engine |
 | Route handlers `src/app/api/**` (auth handler, payment webhooks, cron, private file serving) | Database Engine |
 | `vercel.json`, deploy/migration scripts, db-related `package.json` scripts | Database Engine |
 | Pages and layouts `src/app/**` (except `api/`), `src/components/**`, server actions in `src/app/**/actions.ts`, UI hooks/utilities in `src/lib/ui/**` | App |

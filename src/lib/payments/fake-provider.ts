@@ -36,6 +36,7 @@ export type FakePaymentProviderOptions = {
 
 export class FakePaymentProvider implements PaymentProvider {
   readonly name = "fake";
+  readonly webhookSignatureHeader = FAKE_SIGNATURE_HEADER;
   private readonly now: () => Date;
   private readonly fetchFn: typeof fetch;
 

@@ -16,7 +16,8 @@ export class LocalFileStorage implements FileStorage {
     }
   }
 
-  async put(key: string, data: Uint8Array): Promise<StoredFile> {
+  async put(key: string, data: Uint8Array, _options?: { contentType?: string }): Promise<StoredFile> {
+    void _options;
     const file = this.resolve(key);
     await mkdir(path.dirname(file), { recursive: true });
     await writeFile(file, data);

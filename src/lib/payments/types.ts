@@ -57,6 +57,14 @@ export type WebhookEvent = {
   data: Payment | DepositHold;
 };
 
+/** A verified provider event the app does not act on (still stored and acknowledged). */
+export type IgnoredWebhookEvent = {
+  id: string;
+  type: "ignored";
+  providerType: string;
+  createdAt: string;
+};
+
 export type CreatePaymentInput = Money & {
   /** Card/token reference from the client. The fake provider uses FAKE_PAYMENT_METHODS. */
   paymentMethod: string;
@@ -69,6 +77,8 @@ export type HoldDepositInput = CreatePaymentInput & { expiresAt: Date };
 
 export interface PaymentProvider {
   readonly name: string;
+  /** Request header that carries the webhook signature (e.g. "stripe-signature"). */
+  readonly webhookSignatureHeader: string;
   createPayment(input: CreatePaymentInput): Promise<Payment>;
   cancelPayment(paymentId: string): Promise<Payment>;
   /** Omit amount for a full refund of what remains. */
@@ -77,14 +87,15 @@ export interface PaymentProvider {
   releaseDeposit(holdId: string, reason?: "manual" | "expired"): Promise<DepositHold>;
   /** Take some or all of a held deposit (e.g. damage). Any remainder is released. */
   captureDeposit(holdId: string, amount?: number): Promise<DepositHold>;
-  listExpiredHolds(now: Date): Promise<DepositHold[]>;
+  /** Optional: holds whose authorisation lapsed at the provider (fake provider only). */
+  listExpiredHolds?(now: Date): Promise<DepositHold[]>;
   /** Verify a webhook's signature and parse it. Throws on a bad signature. */
-  verifyWebhook(rawBody: string, signatureHeader: string | null): Promise<WebhookEvent>;
+  verifyWebhook(rawBody: string, signatureHeader: string | null): Promise<WebhookEvent | IgnoredWebhookEvent>;
 }
 
 export class PaymentError extends Error {
   constructor(
-    readonly code: "not_found" | "invalid_state" | "invalid_amount" | "bad_signature",
+    readonly code: "not_found" | "invalid_state" | "invalid_amount" | "bad_signature" | "provider_error",
     message: string,
   ) {
     super(message);

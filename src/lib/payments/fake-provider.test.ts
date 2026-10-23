@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { releaseExpiredHolds } from "@/lib/jobs/release-expired-holds";
 import { FAKE_PAYMENT_METHODS, FakePaymentProvider } from "./fake-provider";
 import { MemoryFakePaymentStore } from "./fake-store";
 import type { WebhookEvent } from "./types";
@@ -101,8 +100,8 @@ describe("FakePaymentProvider", () => {
   });
 });
 
-describe("releaseExpiredHolds", () => {
-  it("releases only holds past their expiry", async () => {
+describe("FakePaymentProvider.listExpiredHolds", () => {
+  it("lists only holds past their expiry", async () => {
     const { provider } = setup();
     const now = new Date();
     const expired = await provider.holdDeposit({
@@ -111,8 +110,6 @@ describe("releaseExpiredHolds", () => {
     await provider.holdDeposit({
       ...pay, paymentMethod: FAKE_PAYMENT_METHODS.success, idempotencyKey: "new", expiresAt: new Date(now.getTime() + 60_000),
     });
-    const result = await releaseExpiredHolds(provider, now);
-    expect(result).toEqual({ released: [expired.id], failed: [] });
-    expect(await provider.listExpiredHolds(now)).toEqual([]);
+    expect((await provider.listExpiredHolds(now)).map((h) => h.id)).toEqual([expired.id]);
   });
 });
