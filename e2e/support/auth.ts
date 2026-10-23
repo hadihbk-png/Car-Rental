@@ -63,11 +63,37 @@ export async function promoteToAdmin(email: string) {
   });
 }
 
-/** UI login through the real login page. Selectors are placeholders until the page exists. */
-export async function loginViaUi(page: Page, user: TestUser) {
-  await page.goto("/login");
-  await page.getByLabel(/email/i).fill(user.email);
-  await page.getByLabel(/password/i).fill(user.password);
-  await page.getByRole("button", { name: /log ?in|sign ?in/i }).click();
-  await expect(page).not.toHaveURL(/\/login(\?|$)/);
+/** On narrow viewports the header actions live in a menu. */
+export async function openMenuIfCollapsed(page: Page) {
+  const toggle = page.getByRole("button", { name: "Open menu" });
+  if (await toggle.isVisible()) await toggle.click();
+}
+
+/** UI login through the real login page (labels from the App Agent: Email, Password, "Log in"). */
+export async function loginViaUi(page: Page, user: Pick<TestUser, "email" | "password">, path = "/login") {
+  await page.goto(path);
+  await page.getByLabel("Email", { exact: true }).fill(user.email);
+  await page.getByLabel("Password", { exact: true }).fill(user.password);
+  await page.getByRole("button", { name: "Log in", exact: true }).click();
+}
+
+/** UI registration (labels: Full name, Email, Password, "Create account"). */
+export async function registerViaUi(page: Page, user: TestUser) {
+  await page.goto("/register");
+  await page.getByLabel("Full name", { exact: true }).fill(user.name);
+  await page.getByLabel("Email", { exact: true }).fill(user.email);
+  await page.getByLabel("Password", { exact: true }).fill(user.password);
+  await page.getByRole("button", { name: "Create account", exact: true }).click();
+}
+
+export async function logoutViaUi(page: Page) {
+  await openMenuIfCollapsed(page);
+  await page.getByRole("button", { name: "Log out" }).first().click();
+}
+
+export function seedLogin(role: "admin" | "customer") {
+  const email = role === "admin" ? (process.env.SEED_ADMIN_EMAIL || "admin@driveeasy.test") : (process.env.SEED_CUSTOMER_EMAIL || "customer@driveeasy.test");
+  const password = role === "admin" ? process.env.SEED_ADMIN_PASSWORD : process.env.SEED_CUSTOMER_PASSWORD;
+  if (!password) throw new Error("SEED_*_PASSWORD not set in .env.local");
+  return { email: email.toLowerCase(), password };
 }

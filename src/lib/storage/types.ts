@@ -5,6 +5,13 @@
 //   private/...  licences and damage images; only ever served through an authorised route
 // Never hand a raw storage URL for a private file to the browser.
 
+/**
+ * Per-file upload cap (4 MB). Vercel Functions reject request bodies over 4.5 MB and uploads go
+ * through server actions (serverActions.bodySizeLimit "4.5mb"), so every upload service enforces
+ * this. Client-safe: the UI can import it from "@/lib/storage/types".
+ */
+export const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
+
 export type StoredFile = { key: string; size: number };
 
 export type FileVisibility = "public" | "private";

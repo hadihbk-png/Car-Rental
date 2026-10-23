@@ -63,10 +63,20 @@ export async function createReservation(
   assertFuturePickup(data.pickupAt, now);
 
   let created: Reservation;
+  let replayed = false;
   try {
     created = await db.transaction(async (tx) => {
       const [vehicle] = await tx.select({ id: vehicles.id }).from(vehicles).where(eq(vehicles.id, data.vehicleId)).for("update");
       if (!vehicle) throw new DomainError("NOT_FOUND", "Vehicle not found.");
+      // A concurrent retry with the same key may have committed while we waited for the lock.
+      const [same] = await tx
+        .select()
+        .from(reservations)
+        .where(and(eq(reservations.userId, actor.id), eq(reservations.idempotencyKey, data.idempotencyKey)));
+      if (same) {
+        replayed = true;
+        return same;
+      }
 
       await expireStaleHolds(tx, data.vehicleId, data.pickupAt, data.returnAt, now);
       const conflicts = await findConflicts(tx, data.vehicleId, data.pickupAt, data.returnAt, { now });
@@ -136,6 +146,7 @@ export async function createReservation(
     }
     throw err;
   }
+  if (replayed) return replay(created, data.vehicleId, now);
   log.info("reservation hold created", { reservationId: created.id, reference: created.reference, userId: actor.id });
   return buildReservationView(created, now);
 }

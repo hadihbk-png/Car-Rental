@@ -104,11 +104,11 @@ Pricing is a pure server function (U), checked again against stored reservations
 | PRC-01 | U | Daily rate 20000 | Pickup 10:00 D1, return 10:00 D2 | 1 day; rental 20000 |
 | PRC-02 | U | Same | Return 10:00 D4 | 3 days |
 | PRC-03 | U | Same | Duration 30 minutes | Minimum 1 day |
-| PRC-04 | U | Same | Return 10:59 D4 (72h59m) | 3 days (within the 59-minute grace) |
-| PRC-05 | U | Same | Return 11:00 D4 (73h00m) | 4 days |
+| PRC-04 | U | Same | Booked return 10:59 D4 (72h59m) | 4 days. Booked days are ceil(duration/24h); the 59-minute grace applies only to late returns (architecture.md) |
+| PRC-05 | U | Same | Booked return 11:00 D4 (73h00m) | 4 days |
 | PRC-06 | U | Same | Return 11:00:01 D4 | 4 days |
 | PRC-07 | U | Booking 3 days; actual return after the grace | Late-return charge | Extra day(s) charged at the applicable rate (plus VAT); recorded as RETURN_CHARGES |
-| PRC-08 | U | Actual return 10:59 after the booked 10:00 | Late charge | 0 |
+| PRC-08 | U | Actual return 10:59 after the booked 10:00 (59 min late) | Late charge | 0; 60 min late is 1 extra day |
 | PRC-09 | U | Actual return 2 days late | Late charge | 2 extra days |
 | PRC-10 | U | Pricing rules (seasonal/weekend/length-of-rental, per category or vehicle) | Rental spans a rule boundary | Rule application matches the documented rule (precedence, per-day vs whole rental) |
 | PRC-11 | U | Extras: PER_DAY child seat 2500 x qty 2; PER_RENTAL GPS 5000 | 3 days | Extras = 2500x2x3 + 5000 = 20000 |
@@ -281,3 +281,23 @@ Cases marked I/E are counted once, under I (PAY-01, 02, 04; AUTH-08; AZ-07, 08).
 ## Retest policy
 
 Every bug in bugs.md gets a regression test with the bug ID in the test name (e.g. `BUG-007: ...`). A fix is marked Verified only after that test passes in the relevant layer and the full suite is green.
+
+## Phase B: where each case lives
+
+| Area | Files | Notes |
+|---|---|---|
+| Unit (U) | `tests/unit/pricing.test.ts`, `tests/unit/time.test.ts`, `tests/unit/webhooks-helper.test.ts`, `tests/unit/no-database.test.ts` | PRC-01..20, CXL/MOD policy boundaries, rate-rule selection, time-zone helpers |
+| MIG/SCH | `tests/integration/migrations.test.ts`, `tests/integration/seed.test.ts` | MIG-01..04, SCH-01..11, SEED-01 (`db:seed` twice = idempotent) |
+| OVL | `tests/integration/overlap.test.ts` | raw SQL against the exclusion constraints and cross-table triggers |
+| CON | `tests/integration/concurrency.test.ts` | each race x10; CON-02b proves the constraint alone stops a second insert |
+| RES/HLD | `tests/integration/reservations.test.ts` | incl. cron GET/POST auth, `pnpm jobs:release-holds` |
+| PRC (DB), FLOW (service), AZ-15 | `tests/integration/pricing-operations.test.ts` | stored price = quote = hand calculation; check-out/in, deposit capture/release; vouchers |
+| CXL/MOD | `tests/integration/cancellation.test.ts` | 48h boundaries with an explicit `now` |
+| PAY/WHK | `tests/integration/payments.test.ts` | signed webhooks via the real route handler; duplicates sequential and concurrent |
+| AUTH/AZ | `tests/integration/authorization.test.ts` | Better Auth handler, private file routes, every admin-only service |
+| SRCH/CAL | `tests/integration/search.test.ts` | |
+| EDGE (exploratory) | `tests/integration/edge-cases.test.ts` | BUG-004..008 regressions |
+| E2E public | `e2e/public/*.spec.ts`, `e2e/auth.spec.ts`, `e2e/layout.spec.ts`, `e2e/smoke.spec.ts` | all 5 browser projects |
+| E2E flows | `e2e/booking.spec.ts`, `e2e/rentals.spec.ts`, `e2e/admin.spec.ts` | desktop-chromium + mobile-webkit; test data via `e2e/support/scenario.mts` (real services against driveeasy_qa) |
+
+Rule clarification applied in phase B: booked rental days have no grace period (72h01m = 4 days); the 59-minute grace applies only to late returns (PRC-04 corrected).

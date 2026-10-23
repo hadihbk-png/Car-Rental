@@ -28,7 +28,9 @@ export const rentalWindowSchema = z
     message: "Return must be after pick-up",
     path: ["returnAt"],
   })
-  .refine((w) => rentalDays(w.pickupAt, w.returnAt) <= MAX_RENTAL_DAYS, {
+  // Zod runs every refine even after one fails; rentalDays() throws on a non-positive period,
+  // so only measure the length once the order is valid (BUG-003).
+  .refine((w) => w.returnAt.getTime() <= w.pickupAt.getTime() || rentalDays(w.pickupAt, w.returnAt) <= MAX_RENTAL_DAYS, {
     message: `Rentals are limited to ${MAX_RENTAL_DAYS} days`,
     path: ["returnAt"],
   });

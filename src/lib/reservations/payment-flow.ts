@@ -2,7 +2,7 @@ import "server-only";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbOrTx } from "@/db";
-import { deposits, payments, paymentWebhookEvents, reservations, type Reservation } from "@/db/schema";
+import { deposits, payments, paymentWebhookEvents, reservations, type PaymentRow, type Reservation } from "@/db/schema";
 import { audit } from "@/lib/audit";
 import type { Actor } from "@/lib/auth/types";
 import { assertDriverReady } from "@/lib/drivers";
@@ -22,6 +22,10 @@ import {
   applyProviderDeposit,
   applyProviderPayment,
   cancelPendingPayments,
+  netPaidFils,
+  reconcileReservationMoney,
+  rentalOutstandingFils,
+  returnBalanceFils,
   refundAcrossPayments,
   releaseDepositRow,
 } from "./money";
@@ -76,6 +80,16 @@ export async function payReservation(
   }
 
   const provider = getPaymentProvider();
+
+  // BUG-004: an earlier attempt that is still pending at the provider (e.g. unfinished 3-D Secure)
+  // is cancelled before a new attempt, so it can never complete later and charge twice.
+  await cancelEarlierPendingAttempts(r.id, "RENTAL", prior?.id);
+  // BUG-008: only ever charge what is still outstanding.
+  const outstanding = await rentalOutstandingFils(db, r);
+  if (outstanding === 0 && !prior) {
+    await tryConfirmReservation(r.id, now);
+    return buildReservationView(await loadReservationRow(db, r.id), now);
+  }
 
   // 1) Security deposit authorisation (skipped when the category has no deposit).
   if (r.depositFils > 0) {
@@ -137,7 +151,7 @@ export async function payReservation(
           purpose: "RENTAL",
           provider: provider.name,
           idempotencyKey: data.idempotencyKey,
-          amountFils: r.totalFils,
+          amountFils: outstanding,
         })
         .returning();
     } catch (err) {
@@ -170,9 +184,36 @@ export async function payReservation(
     await audit({ actor, action: "payment.failed", entityType: "reservation", entityId: r.id, data: { reason: payment.failureReason } });
     throw new DomainError("PAYMENT_FAILED", "Your payment was declined. Please try another card.");
   }
-  if (updated?.status === "succeeded") await tryConfirmReservation(r.id, now);
+  if (updated?.status === "succeeded") {
+    await reconcileReservationMoney(r.id);
+    await tryConfirmReservation(r.id, now);
+  }
   r = await loadReservationRow(db, r.id);
   return buildReservationView(r, now);
+}
+
+/** Cancels still-pending attempts of a purpose (other than keepId) at the provider. */
+export async function cancelEarlierPendingAttempts(reservationId: string, purpose: PaymentRow["purpose"], keepId?: string) {
+  const rows = await db
+    .select()
+    .from(payments)
+    .where(and(eq(payments.reservationId, reservationId), eq(payments.purpose, purpose), eq(payments.status, "pending")));
+  for (const p of rows) {
+    if (p.id === keepId) continue;
+    if (!p.providerPaymentId) {
+      await db.update(payments).set({ status: "canceled", failureReason: "superseded" }).where(eq(payments.id, p.id));
+      continue;
+    }
+    try {
+      const updated = await getPaymentProvider().cancelPayment(p.providerPaymentId);
+      await applyProviderPayment(db, updated, p.id);
+      await audit({ actor: "system", action: "payment.superseded", entityType: "reservation", entityId: reservationId, data: { paymentId: p.id } });
+    } catch (err) {
+      // Already completed at the provider: its success is reconciled (surplus refunded).
+      if (!(err instanceof PaymentError && err.code === "invalid_state")) throw err;
+      log.warn("earlier payment attempt could not be cancelled", { reservationId, paymentId: p.id, error: err.message });
+    }
+  }
 }
 
 function errorCode(err: unknown) {
@@ -209,6 +250,13 @@ async function expireHold(reservationId: string, now: Date) {
  * If the reservation already expired/cancelled, the late money is voided instead.
  */
 export async function tryConfirmReservation(reservationId: string, now: Date = new Date()): Promise<Reservation["status"]> {
+  // Unlocked pre-check: nothing to do unless PENDING (avoids waiting on a row another
+  // operation holds while it talks to the provider).
+  const peek = await loadReservationRow(db, reservationId);
+  if (peek.status !== "PENDING") {
+    if (peek.status === "EXPIRED") await voidMoneyForInactiveReservation(reservationId);
+    return peek.status;
+  }
   const outcome = await db.transaction(async (tx) => {
     const r = await loadReservationRow(tx, reservationId, true);
     if (r.status !== "PENDING") return { status: r.status, voidMoney: r.status === "EXPIRED" };
@@ -229,11 +277,7 @@ export async function tryConfirmReservation(reservationId: string, now: Date = n
 }
 
 async function isFullyPaid(tx: DbOrTx, r: Reservation): Promise<boolean> {
-  const [{ paid }] = await tx
-    .select({ paid: sql<number>`coalesce(sum(${payments.amountFils}), 0)::int` })
-    .from(payments)
-    .where(and(eq(payments.reservationId, r.id), eq(payments.purpose, "RENTAL"), eq(payments.status, "succeeded")));
-  if (paid < r.totalFils) return false;
+  if ((await netPaidFils(tx, r.id, ["RENTAL", "MODIFICATION"])) < r.totalFils) return false;
   if (r.depositFils === 0) return true;
   const [held] = await tx
     .select({ id: deposits.id })
@@ -296,6 +340,7 @@ export async function processPaymentWebhook(
   now: Date = new Date(),
 ): Promise<WebhookResult> {
   let confirmReservationId: string | undefined;
+  let reconcileReservationId: string | undefined;
   const result = await db.transaction(async (tx) => {
     await tx
       .insert(paymentWebhookEvents)
@@ -314,7 +359,10 @@ export async function processPaymentWebhook(
     if (event.type !== "ignored") {
       if (event.type.startsWith("payment.")) {
         const row = await applyProviderPayment(tx, event.data as Payment);
-        if (row && event.type === "payment.succeeded") confirmReservationId = row.reservationId;
+        if (row && event.type === "payment.succeeded") {
+          confirmReservationId = row.reservationId;
+          reconcileReservationId = row.reservationId;
+        }
         if (!row) log.warn("webhook for unknown payment", { eventId: event.id, providerId: event.data.id });
       } else {
         const row = await applyProviderDeposit(tx, event.data as DepositHold);
@@ -325,6 +373,81 @@ export async function processPaymentWebhook(
     await tx.update(paymentWebhookEvents).set({ processedAt: now }).where(eq(paymentWebhookEvents.id, stored.id));
     return { eventId: event.id, duplicate: false, type: event.type };
   });
+  // A success for an already-paid / cancelled / expired reservation is refunded (BUG-004/008).
+  // wait=false: if another money operation is running it reconciles itself when it finishes.
+  if (reconcileReservationId) await reconcileReservationMoney(reconcileReservationId, { wait: false });
   if (confirmReservationId) await tryConfirmReservation(confirmReservationId, now);
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Return charges above the deposit (BUG-007)
+// ---------------------------------------------------------------------------
+
+export const payReturnBalanceSchema = payReservationSchema;
+
+/**
+ * Pays the outstanding return charges (late/fuel/damage above what the deposit covered) of a
+ * RETURNED reservation. Owner or admin. Charges only the outstanding balance; idempotent per
+ * idempotencyKey; earlier still-pending attempts are cancelled first; any surplus from a late
+ * success is refunded by reconciliation.
+ */
+export async function payReturnBalance(
+  actor: Actor,
+  input: z.input<typeof payReturnBalanceSchema>,
+  now: Date = new Date(),
+): Promise<ReservationView> {
+  const data = parseInput(payReturnBalanceSchema, input);
+  const r = await loadReservationRow(db, data.reservationId);
+  assertCanAccess(actor, r);
+  const [prior] = await db.select().from(payments).where(eq(payments.idempotencyKey, data.idempotencyKey));
+  if (prior && (prior.reservationId !== r.id || prior.purpose !== "RETURN_CHARGES")) {
+    throw new DomainError("CONFLICT", "Idempotency key already used.");
+  }
+  if (prior?.status === "succeeded") return buildReservationView(await loadReservationRow(db, r.id), now);
+  if (prior && (prior.status === "failed" || prior.status === "canceled")) {
+    throw new DomainError("PAYMENT_FAILED", "That payment attempt failed. Please try again.");
+  }
+  if (r.status !== "RETURNED") throw new DomainError("INVALID_STATE", "There is no balance to pay on this reservation.");
+
+  await cancelEarlierPendingAttempts(r.id, "RETURN_CHARGES", prior?.id);
+  const balance = await returnBalanceFils(db, r.id);
+  if (balance === 0 && !prior) throw new DomainError("INVALID_STATE", "There is no balance to pay on this reservation.");
+
+  const provider = getPaymentProvider();
+  let row = prior;
+  if (!row) {
+    try {
+      [row] = await db
+        .insert(payments)
+        .values({ reservationId: r.id, purpose: "RETURN_CHARGES", provider: provider.name, idempotencyKey: data.idempotencyKey, amountFils: balance })
+        .returning();
+    } catch (err) {
+      if (!isUniqueViolation(err)) throw err;
+      [row] = await db.select().from(payments).where(eq(payments.idempotencyKey, data.idempotencyKey));
+      if (!row) throw err;
+    }
+  }
+  let payment: Payment;
+  try {
+    payment = await provider.createPayment({
+      amount: row.amountFils,
+      currency: "AED",
+      paymentMethod: data.paymentMethod,
+      idempotencyKey: row.idempotencyKey,
+      metadata: { reservationId: r.id, paymentId: row.id, reference: r.reference, purpose: "RETURN_CHARGES" },
+    });
+  } catch (err) {
+    await db.update(payments).set({ status: "failed", failureReason: errorCode(err) }).where(eq(payments.id, row.id));
+    throw paymentFailed(err, "The payment could not be processed.");
+  }
+  const updated = await applyProviderPayment(db, payment, row.id);
+  if (updated?.status === "failed" || updated?.status === "canceled") {
+    throw new DomainError("PAYMENT_FAILED", "Your payment was declined. Please try another card.");
+  }
+  if (updated?.status === "succeeded") {
+    await reconcileReservationMoney(r.id);
+    await audit({ actor, action: "reservation.balance_paid", entityType: "reservation", entityId: r.id, data: { amountFils: row.amountFils } });
+  }
+  return buildReservationView(await loadReservationRow(db, r.id), now);
 }

@@ -8,7 +8,8 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import pg from "pg";
 
-export const PROJECT_ROOT = path.resolve(import.meta.dirname, "..", "..");
+// process.cwd(), not import.meta: Playwright loads this file as CommonJS. Both runners start in the project root.
+export const PROJECT_ROOT = process.cwd();
 export const MIGRATIONS_FOLDER = path.join(PROJECT_ROOT, "drizzle");
 
 /** Loads .env.local into process.env without overriding values already set. */

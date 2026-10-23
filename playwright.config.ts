@@ -24,6 +24,8 @@ const serverCommand =
       ? `${prepare} && pnpm exec next start --port ${port}`
       : `${prepare} && pnpm exec next build && pnpm exec next start --port ${port}`;
 
+const CROSS_BROWSER = ["smoke.spec.ts", "layout.spec.ts", "auth.spec.ts", "public/**/*.spec.ts"];
+
 export default defineConfig({
   testDir: "./e2e",
   testMatch: "**/*.spec.ts",
@@ -36,14 +38,16 @@ export default defineConfig({
   timeout: 60_000,
   expect: { timeout: 10_000 },
   use: { baseURL, trace: "retain-on-failure", screenshot: "only-on-failure" },
+  // Data-heavy flows (booking, rentals, admin) run on one desktop and one phone project; public pages,
+  // auth and layout run on all five.
   projects: [
     // Desktop
     { name: "desktop-chromium", use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } } },
-    { name: "desktop-firefox", use: { ...devices["Desktop Firefox"], viewport: { width: 1440, height: 900 } } },
-    { name: "desktop-webkit", use: { ...devices["Desktop Safari"], viewport: { width: 1440, height: 900 } } },
+    { name: "desktop-firefox", testMatch: CROSS_BROWSER, use: { ...devices["Desktop Firefox"], viewport: { width: 1440, height: 900 } } },
+    { name: "desktop-webkit", testMatch: CROSS_BROWSER, use: { ...devices["Desktop Safari"], viewport: { width: 1440, height: 900 } } },
     // Mobile: iPhone 13 is 390x844; Pixel 7 is 412x915.
     { name: "mobile-webkit", use: { ...devices["iPhone 13"] } },
-    { name: "mobile-chromium", use: { ...devices["Pixel 7"] } },
+    { name: "mobile-chromium", testMatch: CROSS_BROWSER, use: { ...devices["Pixel 7"] } },
   ],
   webServer: {
     command: serverCommand,

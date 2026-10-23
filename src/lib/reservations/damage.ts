@@ -9,11 +9,11 @@ import type { Actor } from "@/lib/auth/types";
 import { assertMagicBytes } from "@/lib/drivers";
 import { DomainError } from "@/lib/errors";
 import { getFileStorage } from "@/lib/storage";
-import { contentTypeOf, extensionFor } from "@/lib/storage/types";
+import { contentTypeOf, extensionFor, MAX_UPLOAD_BYTES } from "@/lib/storage/types";
 import { parseInput, zFils, zId } from "@/lib/validation";
 
 export const DAMAGE_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
-export const DAMAGE_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
+export const DAMAGE_IMAGE_MAX_BYTES = MAX_UPLOAD_BYTES;
 
 function assertAdmin(actor: Actor) {
   if (actor.role !== "admin") throw new DomainError("FORBIDDEN", "Administrator access required.");
@@ -72,7 +72,7 @@ export async function addDamageImage(
   parseInput(zId, reportId);
   const ext = extensionFor(file.contentType, DAMAGE_IMAGE_TYPES);
   if (!ext) throw new DomainError("VALIDATION", "Upload a JPEG, PNG or WebP image.");
-  if (!file.data.byteLength || file.data.byteLength > DAMAGE_IMAGE_MAX_BYTES) throw new DomainError("VALIDATION", "Images must be under 8 MB.");
+  if (!file.data.byteLength || file.data.byteLength > DAMAGE_IMAGE_MAX_BYTES) throw new DomainError("VALIDATION", "Images must be 4 MB or smaller.");
   assertMagicBytes(file.data, file.contentType);
   const [report] = await db.select().from(damageReports).where(eq(damageReports.id, reportId));
   if (!report) throw new DomainError("NOT_FOUND", "Damage report not found.");

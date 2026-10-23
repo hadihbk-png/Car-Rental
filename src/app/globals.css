@@ -1,26 +1,174 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/*
+ * DriveEasy design tokens.
+ * Brand: deep "gulf teal" for trust, warm "desert sand" accent for highlights.
+ * Every text/background pair used by components meets WCAG AA (4.5:1) or better.
+ */
+@theme {
+  /* Typography */
+  --font-sans: var(--font-jakarta), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: var(--font-jakarta), ui-sans-serif, system-ui, sans-serif;
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+  /* Brand teal */
+  --color-brand-50: #eefbfa;
+  --color-brand-100: #d3f3f1;
+  --color-brand-200: #a9e6e3;
+  --color-brand-300: #72d2cf;
+  --color-brand-400: #3ab5b3;
+  --color-brand-500: #1d9897;
+  --color-brand-600: #157a7b; /* 5.1:1 on white */
+  --color-brand-700: #146264; /* 7.1:1 on white - primary actions and links */
+  --color-brand-800: #154f51;
+  --color-brand-900: #0b3a3d;
+  --color-brand-950: #062729;
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+  /* Accent sand / amber */
+  --color-accent-50: #fff8eb;
+  --color-accent-100: #feeac7;
+  --color-accent-200: #fdd38a;
+  --color-accent-300: #fcb84d;
+  --color-accent-400: #fb9f24;
+  --color-accent-500: #f57c0b;
+  --color-accent-600: #d95a06;
+  --color-accent-700: #b43c09; /* 5.9:1 on white */
+  --color-accent-800: #922f0e;
+  --color-accent-900: #78280f;
+
+  /* Semantic surfaces and text */
+  --color-canvas: #f5f7f8;
+  --color-surface: #ffffff;
+  --color-surface-muted: #eef2f4;
+  --color-ink: #0f1c24; /* 17:1 on white */
+  --color-ink-muted: #4a5a66; /* 7.1:1 on white */
+  --color-ink-subtle: #62717d; /* 5.0:1 on white - never for small text on canvas tints */
+  --color-line: #dfe5e9;
+  --color-line-strong: #c3ccd3;
+  --color-focus: #146264;
+
+  /* Radii */
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  --radius-2xl: 1.25rem;
+
+  /* Elevation */
+  --shadow-xs: 0 1px 2px rgb(15 28 36 / 0.06);
+  --shadow-card: 0 1px 2px rgb(15 28 36 / 0.05), 0 4px 12px -2px rgb(15 28 36 / 0.08);
+  --shadow-raised: 0 2px 4px rgb(15 28 36 / 0.06), 0 12px 32px -8px rgb(15 28 36 / 0.18);
+  --shadow-overlay: 0 24px 64px -12px rgb(6 39 41 / 0.35);
+
+  /* Motion */
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+
+  --animate-shimmer: shimmer 1.6s ease-in-out infinite;
+  --animate-toast-in: toast-in 220ms var(--ease-out-soft);
+  --animate-sheet-in: sheet-in 260ms var(--ease-out-soft);
+
+  @keyframes shimmer {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.55;
+    }
+  }
+  @keyframes toast-in {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  @keyframes sheet-in {
+    from {
+      transform: translateY(100%);
+    }
+    to {
+      transform: translateY(0);
+    }
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    scroll-padding-top: 5rem; /* keep anchored headings clear of the sticky header */
+  }
+
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-feature-settings: "cv11", "ss01";
+    text-rendering: optimizeLegibility;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-display);
+    letter-spacing: -0.015em;
+    text-wrap: balance;
+  }
+
+  /* One consistent, highly visible focus ring for keyboard users. */
+  :focus-visible {
+    outline: 3px solid var(--color-focus);
+    outline-offset: 2px;
+    border-radius: 0.25rem;
+  }
+
+  ::selection {
+    background-color: var(--color-brand-200);
+    color: var(--color-brand-950);
+  }
+
+  /* Native dialog backdrop used by Dialog and the mobile filter sheet. */
+  dialog::backdrop {
+    background: rgb(6 39 41 / 0.55);
+    backdrop-filter: blur(2px);
+  }
+
+  [hidden] {
+    display: none !important;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@utility tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+@utility container-page {
+  width: 100%;
+  max-width: 80rem;
+  margin-inline: auto;
+  padding-inline: 1rem;
+  @media (width >= 40rem) {
+    padding-inline: 1.5rem;
+  }
+  @media (width >= 64rem) {
+    padding-inline: 2rem;
+  }
 }

@@ -1,8 +1,8 @@
 import "server-only";
 import { and, asc, desc, eq, gte, ilike, lt, or, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
-import { db } from "@/db";
-import { damageReports, deposits, rentalAgreements, reservations, users, vehicles } from "@/db/schema";
+import { db, type DbOrTx } from "@/db";
+import { damageReports, deposits, payments, rentalAgreements, reservations, users, vehicles } from "@/db/schema";
 import { audit } from "@/lib/audit";
 import type { Actor } from "@/lib/auth/types";
 import { assertDriverReady } from "@/lib/drivers";
@@ -13,6 +13,19 @@ import { returnCharges, type ReturnCharges } from "@/lib/pricing/calc";
 import { parseInput, zFils, zId, zInstant } from "@/lib/validation";
 import { applyProviderDeposit, releaseDepositRow } from "./money";
 import { buildReservationView, buildReservationViews, loadReservationRow, type ReservationView } from "./view";
+
+/** Another reservation of this vehicle is PICKED_UP or has an open rental agreement. */
+async function hasOtherOpenRental(tx: DbOrTx, vehicleId: string, exceptReservationId: string): Promise<boolean> {
+  const res = await tx.execute<{ open: boolean }>(sql`
+    SELECT EXISTS (
+      SELECT 1 FROM reservations r
+      WHERE r.vehicle_id = ${vehicleId} AND r.id <> ${exceptReservationId} AND r.status = 'PICKED_UP'
+    ) OR EXISTS (
+      SELECT 1 FROM rental_agreements a
+      WHERE a.vehicle_id = ${vehicleId} AND a.reservation_id <> ${exceptReservationId} AND a.checked_in_at IS NULL
+    ) AS open`);
+  return res.rows[0].open;
+}
 
 function assertAdmin(actor: Actor) {
   if (actor.role !== "admin") throw new DomainError("FORBIDDEN", "Administrator access required.");
@@ -27,6 +40,8 @@ export const listReservationsSchema = z.object({
   pickupTo: zInstant.optional(),
   /** Reference, customer email/name or plate. */
   q: z.string().trim().max(100).optional(),
+  /** Only reservations with return charges still owed (BUG-007). */
+  balanceDue: z.boolean().optional(),
   sort: z.enum(["pickup_asc", "pickup_desc", "created_desc"]).default("pickup_asc"),
   limit: z.number().int().min(1).max(200).default(50),
   offset: z.number().int().min(0).default(0),
@@ -46,6 +61,12 @@ export async function listReservations(
   if (f.vehicleId) where.push(eq(reservations.vehicleId, f.vehicleId));
   if (f.pickupFrom) where.push(gte(reservations.pickupAt, f.pickupFrom));
   if (f.pickupTo) where.push(lt(reservations.pickupAt, f.pickupTo));
+  if (f.balanceDue) {
+    where.push(sql`EXISTS (SELECT 1 FROM rental_agreements a WHERE a.reservation_id = ${reservations.id}
+      AND a.amount_due_fils > coalesce((SELECT sum(p.amount_fils - p.amount_refunded_fils) FROM payments p
+        WHERE p.reservation_id = ${reservations.id} AND p.purpose = 'RETURN_CHARGES'
+          AND p.status IN ('succeeded', 'partially_refunded', 'refunded')), 0))`);
+  }
   if (f.q) {
     const like = `%${f.q.replace(/[%_\\]/g, "\\$&")}%`;
     where.push(
@@ -95,8 +116,11 @@ export async function checkOutReservation(
 ): Promise<ReservationView> {
   assertAdmin(actor);
   const data = parseInput(checkOutSchema, input);
+  const target = await loadReservationRow(db, data.reservationId);
   const id = await db.transaction(async (tx) => {
-    const r = await loadReservationRow(tx, data.reservationId, true);
+    // Vehicle row first (same order as booking), then the reservation.
+    const [v] = await tx.select().from(vehicles).where(eq(vehicles.id, target.vehicleId)).for("update");
+    const r = await loadReservationRow(tx, target.id, true);
     if (r.status !== "CONFIRMED") throw new DomainError("INVALID_STATE", `Cannot check out a ${r.status.toLowerCase()} reservation.`);
     if (now.getTime() < r.pickupAt.getTime() - EARLY_CHECKOUT_MS) {
       throw new DomainError("POLICY_VIOLATION", "Too early: check-out opens 24 hours before pick-up.");
@@ -107,7 +131,10 @@ export async function checkOutReservation(
       const [held] = await tx.select({ id: deposits.id }).from(deposits).where(and(eq(deposits.reservationId, r.id), eq(deposits.status, "held")));
       if (!held) throw new DomainError("POLICY_VIOLATION", "No security deposit is held for this reservation.");
     }
-    const [v] = await tx.select().from(vehicles).where(eq(vehicles.id, r.vehicleId)).for("update");
+    // BUG-005: the previous renter (back-to-back, returning late) must be checked in first.
+    if (await hasOtherOpenRental(tx, r.vehicleId, r.id)) {
+      throw new DomainError("INVALID_STATE", "This vehicle has not been returned from the previous rental yet. Check that rental in first.");
+    }
     if (data.mileageKm < v.mileageKm) {
       throw new DomainError("VALIDATION", `Mileage cannot be below the recorded ${v.mileageKm} km.`, { mileageKm: ["Too low"] });
     }
@@ -163,8 +190,10 @@ export async function checkInReservation(
   const returnedAt = data.returnedAt ?? now;
   if (returnedAt.getTime() > now.getTime() + 60_000) throw new DomainError("VALIDATION", "Return time cannot be in the future.");
 
+  const target = await loadReservationRow(db, data.reservationId);
   const { reservationId, charges } = await db.transaction(async (tx) => {
-    const r = await loadReservationRow(tx, data.reservationId, true);
+    const [vehicle] = await tx.select().from(vehicles).where(eq(vehicles.id, target.vehicleId)).for("update");
+    const r = await loadReservationRow(tx, target.id, true);
     if (r.status !== "PICKED_UP") throw new DomainError("INVALID_STATE", `Cannot check in a ${r.status.toLowerCase()} reservation.`);
     const [ag] = await tx.select().from(rentalAgreements).where(eq(rentalAgreements.reservationId, r.id)).for("update");
     if (!ag) throw new DomainError("INVALID_STATE", "No rental agreement found.");
@@ -202,7 +231,25 @@ export async function checkInReservation(
       })
       .where(eq(rentalAgreements.id, ag.id));
     await tx.update(reservations).set({ status: "RETURNED", updatedAt: now }).where(eq(reservations.id, r.id));
-    await tx.update(vehicles).set({ status: data.vehicleStatus, mileageKm: data.mileageKm }).where(eq(vehicles.id, r.vehicleId));
+    // BUG-006: status from the actual state - still ON_RENT if another rental has the car,
+    // RETIRED stays retired; otherwise the status staff chose.
+    const nextStatus =
+      vehicle.status === "RETIRED" ? "RETIRED" : (await hasOtherOpenRental(tx, r.vehicleId, r.id)) ? "ON_RENT" : data.vehicleStatus;
+    await tx
+      .update(vehicles)
+      .set({ status: nextStatus, mileageKm: Math.max(vehicle.mileageKm, data.mileageKm) })
+      .where(eq(vehicles.id, r.vehicleId));
+    // BUG-007: charges above the deposit become an outstanding RETURN_CHARGES payment.
+    if (charges.amountDueFils > 0) {
+      await tx.insert(payments).values({
+        reservationId: r.id,
+        purpose: "RETURN_CHARGES",
+        provider: getPaymentProvider().name,
+        idempotencyKey: `return-charges:${r.id}:initial`,
+        amountFils: charges.amountDueFils,
+        status: "pending",
+      });
+    }
     // Link damage reports filed during this rental to the agreement.
     await tx.update(damageReports).set({ rentalAgreementId: ag.id }).where(eq(damageReports.reservationId, r.id));
     await audit(

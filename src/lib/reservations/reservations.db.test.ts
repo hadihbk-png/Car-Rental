@@ -89,6 +89,10 @@ describe("reservation transaction", () => {
     expect(b.id).toBe(a.id);
     const [again] = await Promise.all([createReservation(f.customer, input)]);
     expect(again.id).toBe(a.id);
+    // Concurrent retries with one fresh key: all get the same reservation, none is rejected.
+    const input2 = booking(f.vehicles[2].id, future(22), 1);
+    const raced = await Promise.all([0, 1, 2].map(() => createReservation(f.customer, input2)));
+    expect(new Set(raced.map((x) => x.id)).size).toBe(1);
   });
 
   it("rejects a booking that overlaps maintenance, and a past pick-up", async () => {

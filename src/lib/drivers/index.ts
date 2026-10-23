@@ -8,11 +8,11 @@ import { audit } from "@/lib/audit";
 import type { Actor } from "@/lib/auth/types";
 import { DomainError } from "@/lib/errors";
 import { getFileStorage } from "@/lib/storage";
-import { contentTypeOf, extensionFor } from "@/lib/storage/types";
+import { contentTypeOf, extensionFor, MAX_UPLOAD_BYTES } from "@/lib/storage/types";
 import { parseInput, zId, zLocalDate } from "@/lib/validation";
 
 export const MIN_DRIVER_AGE = 21;
-export const LICENCE_MAX_BYTES = 5 * 1024 * 1024;
+export const LICENCE_MAX_BYTES = MAX_UPLOAD_BYTES;
 export const LICENCE_CONTENT_TYPES = ["image/jpeg", "image/png", "image/webp", "application/pdf"] as const;
 
 /** Driver profile as shown to its owner/admins. The storage key is never exposed. */
@@ -118,7 +118,7 @@ export async function uploadLicence(
   const ext = extensionFor(file.contentType, LICENCE_CONTENT_TYPES);
   if (!ext) throw new DomainError("VALIDATION", "Upload a JPEG, PNG, WebP or PDF file.", { file: ["Unsupported type"] });
   if (file.data.byteLength === 0 || file.data.byteLength > LICENCE_MAX_BYTES) {
-    throw new DomainError("VALIDATION", "The file must be between 1 byte and 5 MB.", { file: ["Too large"] });
+    throw new DomainError("VALIDATION", "The file must be between 1 byte and 4 MB.", { file: ["Too large"] });
   }
   assertMagicBytes(file.data, file.contentType);
   const storage = getFileStorage();

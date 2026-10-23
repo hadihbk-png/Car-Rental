@@ -20,7 +20,7 @@ import { isValidTimeZone } from "@/lib/availability/time";
 import { assertMagicBytes } from "@/lib/drivers";
 import { DomainError, isExclusionViolation, pgErrorOf } from "@/lib/errors";
 import { getFileStorage } from "@/lib/storage";
-import { extensionFor, publicFileUrl } from "@/lib/storage/types";
+import { extensionFor, MAX_UPLOAD_BYTES, publicFileUrl } from "@/lib/storage/types";
 import { parseInput, zFils, zId, zInstant } from "@/lib/validation";
 import { toBranchSummary, type BranchSummary } from "./catalog";
 
@@ -280,7 +280,7 @@ export async function addVehiclePhoto(actor: Actor, vehicleId: string, file: { d
   parseInput(zId, vehicleId);
   const ext = extensionFor(file.contentType, VEHICLE_PHOTO_TYPES);
   if (!ext) throw new DomainError("VALIDATION", "Upload a JPEG, PNG or WebP image.");
-  if (!file.data.byteLength || file.data.byteLength > 8 * 1024 * 1024) throw new DomainError("VALIDATION", "Images must be under 8 MB.");
+  if (!file.data.byteLength || file.data.byteLength > MAX_UPLOAD_BYTES) throw new DomainError("VALIDATION", "Images must be 4 MB or smaller.");
   assertMagicBytes(file.data, file.contentType);
   const [v] = await db.select({ keys: vehicles.photoKeys }).from(vehicles).where(eq(vehicles.id, vehicleId));
   if (!v) throw new DomainError("NOT_FOUND", "Vehicle not found.");

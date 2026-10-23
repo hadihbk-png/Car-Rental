@@ -1,7 +1,8 @@
 import "server-only";
 import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 import { db, type DbOrTx } from "@/db";
-import { deposits, payments, type DepositRow, type PaymentRow } from "@/db/schema";
+import { deposits, payments, rentalAgreements, reservations, type DepositRow, type PaymentRow, type Reservation } from "@/db/schema";
+import { audit } from "@/lib/audit";
 import { log } from "@/lib/log";
 import { getPaymentProvider, PaymentError, type DepositHold, type Payment } from "@/lib/payments";
 
@@ -171,4 +172,133 @@ export async function cancelPendingPayments(reservationId: string): Promise<void
       throw err;
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Amount due and reconciliation (BUG-004 / BUG-007 / BUG-008)
+// ---------------------------------------------------------------------------
+
+const RENTAL_PURPOSES = ["RENTAL", "MODIFICATION"] as const;
+const SETTLED = ["succeeded", "partially_refunded", "refunded"] as const;
+
+/** What the customer owes for the rental itself, given the reservation's current state. */
+export function rentalDueFils(r: Pick<Reservation, "status" | "totalFils" | "cancellationFeeFils">): number {
+  switch (r.status) {
+    case "EXPIRED":
+      return 0;
+    case "CANCELLED":
+    case "REFUNDED":
+      return r.cancellationFeeFils ?? 0;
+    default:
+      return r.totalFils;
+  }
+}
+
+/** Net succeeded money (amount - refunded) for the given purposes. */
+export async function netPaidFils(tx: DbOrTx, reservationId: string, purposes: readonly PaymentRow["purpose"][]): Promise<number> {
+  const [{ net }] = await tx
+    .select({ net: sql<number>`coalesce(sum(${payments.amountFils} - ${payments.amountRefundedFils}), 0)::int` })
+    .from(payments)
+    .where(and(eq(payments.reservationId, reservationId), inArray(payments.purpose, [...purposes]), inArray(payments.status, [...SETTLED])));
+  return net;
+}
+
+/** Outstanding rental amount (never negative). */
+export async function rentalOutstandingFils(tx: DbOrTx, r: Reservation): Promise<number> {
+  return Math.max(0, rentalDueFils(r) - (await netPaidFils(tx, r.id, RENTAL_PURPOSES)));
+}
+
+/** Outstanding return charges (agreement amount due minus RETURN_CHARGES paid). */
+export async function returnBalanceFils(tx: DbOrTx, reservationId: string): Promise<number> {
+  const [ag] = await tx
+    .select({ due: rentalAgreements.amountDueFils })
+    .from(rentalAgreements)
+    .where(eq(rentalAgreements.reservationId, reservationId));
+  if (!ag) return 0;
+  return Math.max(0, ag.due - (await netPaidFils(tx, reservationId, ["RETURN_CHARGES"])));
+}
+
+/** Serialises money operations on one reservation (transaction-scoped advisory lock). */
+export async function lockReservationMoney(tx: DbOrTx, reservationId: string, wait = true): Promise<boolean> {
+  if (wait) {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${"reservation-money:" + reservationId}, 0))`);
+    return true;
+  }
+  const res = await tx.execute<{ ok: boolean }>(
+    sql`SELECT pg_try_advisory_xact_lock(hashtextextended(${"reservation-money:" + reservationId}, 0)) AS ok`,
+  );
+  return res.rows[0].ok;
+}
+
+export type ReconcileResult = { refundedFils: number; skipped: boolean };
+
+/**
+ * Never let a reservation keep more money than it owes. Refunds any surplus (latest-settled payments
+ * first) for the rental (due = total, the cancellation fee, or 0 when expired) and for return
+ * charges (due = agreement.amount_due_fils). Serialised per reservation by an advisory lock;
+ * idempotent (a second run finds no surplus). With wait=false (webhooks) it skips when another
+ * money operation holds the lock - that operation reconciles when it finishes.
+ */
+export async function reconcileReservationMoney(reservationId: string, options: { wait?: boolean } = {}): Promise<ReconcileResult> {
+  return db.transaction(async (tx) => {
+    if (!(await lockReservationMoney(tx, reservationId, options.wait ?? true))) return { refundedFils: 0, skipped: true };
+    const [r] = await tx.select().from(reservations).where(eq(reservations.id, reservationId));
+    if (!r) return { refundedFils: 0, skipped: false };
+    let refundedFils = 0;
+    const groups: { purposes: readonly PaymentRow["purpose"][]; due: number }[] = [
+      { purposes: RENTAL_PURPOSES, due: rentalDueFils(r) },
+    ];
+    const [ag] = await tx
+      .select({ due: rentalAgreements.amountDueFils })
+      .from(rentalAgreements)
+      .where(eq(rentalAgreements.reservationId, reservationId));
+    groups.push({ purposes: ["RETURN_CHARGES"], due: ag?.due ?? 0 });
+
+    for (const g of groups) {
+      let surplus = (await netPaidFils(tx, reservationId, g.purposes)) - g.due;
+      if (surplus <= 0) continue;
+      const rows = await tx
+        .select()
+        .from(payments)
+        .where(
+          and(
+            eq(payments.reservationId, reservationId),
+            inArray(payments.purpose, [...g.purposes]),
+            inArray(payments.status, ["succeeded", "partially_refunded"]),
+          ),
+        )
+        // The most recently settled payment (e.g. a late success) is refunded first.
+        .orderBy(desc(payments.updatedAt), desc(payments.createdAt));
+      for (const p of rows) {
+        if (surplus <= 0) break;
+        const refundable = p.amountFils - p.amountRefundedFils;
+        if (refundable <= 0 || !p.providerPaymentId) continue;
+        const amount = Math.min(refundable, surplus);
+        await getPaymentProvider().refundPayment(p.providerPaymentId, amount);
+        const newRefunded = p.amountRefundedFils + amount;
+        // Written on its own connection so a synchronous provider webhook never waits on us.
+        await db
+          .update(payments)
+          .set({
+            amountRefundedFils: sql`GREATEST(${payments.amountRefundedFils}, ${newRefunded})`,
+            status: newRefunded >= p.amountFils ? "refunded" : "partially_refunded",
+          })
+          .where(eq(payments.id, p.id));
+        surplus -= amount;
+        refundedFils += amount;
+        log.warn("surplus payment refunded automatically", { reservationId, paymentId: p.id, amountFils: amount, purpose: p.purpose });
+        await audit(
+          {
+            actor: "system",
+            action: "payment.surplus_refunded",
+            entityType: "reservation",
+            entityId: reservationId,
+            data: { paymentId: p.id, purpose: p.purpose, amountFils: amount, reservationStatus: r.status },
+          },
+          db,
+        );
+      }
+    }
+    return { refundedFils, skipped: false };
+  });
 }

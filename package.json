@@ -23,6 +23,8 @@
     "vercel-build": "node --conditions=react-server --import tsx scripts/db-migrate.mts && next build"
   },
   "dependencies": {
+    "@stripe/react-stripe-js": "^7.0.0",
+    "@stripe/stripe-js": "^10.1.0",
     "@vercel/blob": "^2.8.2",
     "better-auth": "^1.7.12",
     "drizzle-orm": "^0.45.4",

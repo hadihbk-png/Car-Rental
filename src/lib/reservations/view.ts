@@ -62,7 +62,9 @@ export type ReservationView = {
   confirmedAt: Date | null;
   cancelledAt: Date | null;
   createdAt: Date;
-  can: { pay: boolean; cancel: boolean; modifyDates: boolean; viewVoucher: boolean };
+  /** Return charges above the deposit still owed (pay with payReturnBalance). */
+  balanceDueFils: number;
+  can: { pay: boolean; cancel: boolean; modifyDates: boolean; viewVoucher: boolean; payBalance: boolean };
   /** What cancelling now would cost (only when cancel is allowed). */
   cancellationPreview: CancellationOutcome | null;
   customer: { id: string; name: string; email: string };
@@ -138,6 +140,10 @@ export async function buildReservationViews(rows: Reservation[], now: Date = new
           ? ({ allowed: true, free: true, feeFils: 0, refundFils: 0 } as const)
           : null;
     const ag = agreements.find((a) => a.reservationId === r.id);
+    const returnPaid = money.payments
+      .filter((p) => p.purpose === "RETURN_CHARGES" && (p.status === "succeeded" || p.status === "partially_refunded" || p.status === "refunded"))
+      .reduce((sum, p) => sum + p.amountFils - p.amountRefundedFils, 0);
+    const balanceDueFils = ag ? Math.max(0, ag.amountDueFils - returnPaid) : 0;
     views.push({
       id: r.id,
       reference: r.reference,
@@ -183,9 +189,12 @@ export async function buildReservationViews(rows: Reservation[], now: Date = new
       can: {
         pay: holdLive,
         cancel: !!preview?.allowed,
-        modifyDates: (r.status === "CONFIRMED" || holdLive) && canModifyDates(r.pickupAt, now),
+        // BUG-008: only CONFIRMED reservations can change dates (finish or cancel payment first).
+        modifyDates: r.status === "CONFIRMED" && canModifyDates(r.pickupAt, now),
         viewVoucher: r.status === "CONFIRMED" || r.status === "PICKED_UP" || r.status === "RETURNED",
+        payBalance: r.status === "RETURNED" && balanceDueFils > 0,
       },
+      balanceDueFils,
       cancellationPreview: preview,
       customer: userRows.find((u) => u.id === r.userId)!,
       agreement: ag

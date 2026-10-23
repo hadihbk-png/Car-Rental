@@ -22,10 +22,19 @@ export const DAY = 24 * HOUR;
 const rand = () => randomUUID().replace(/-/g, "").toUpperCase();
 
 /** Fresh in-memory fake provider (no webhooks, no JSON file). */
-export function useMemoryPayments(): FakePaymentProvider {
-  const provider = new FakePaymentProvider({ store: new MemoryFakePaymentStore(), webhookSecret: "test-webhook-secret" });
+export function useMemoryPayments(): FakePaymentProvider & { store: MemoryFakePaymentStore } {
+  const store = new MemoryFakePaymentStore();
+  const provider = new FakePaymentProvider({ store, webhookSecret: "test-webhook-secret" });
   setPaymentProviderForTesting(provider);
-  return provider;
+  return Object.assign(provider, { store });
+}
+
+/** Simulates the provider completing a pending charge (e.g. 3-D Secure finished late). */
+export async function completeAtProvider(store: MemoryFakePaymentStore, providerPaymentId: string) {
+  const state = await store.load();
+  state.payments[providerPaymentId].status = "succeeded";
+  await store.save(state);
+  return state.payments[providerPaymentId];
 }
 
 export async function createUser(role: "customer" | "admin" = "customer"): Promise<Actor> {

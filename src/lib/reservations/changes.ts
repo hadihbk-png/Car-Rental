@@ -13,7 +13,16 @@ import { canModifyDates, cancellationOutcome } from "@/lib/pricing/calc";
 import { assertFuturePickup, priceRental, rentalWindowSchema } from "@/lib/pricing/quote";
 import { parseInput, zId, zInstant } from "@/lib/validation";
 import { idempotencyKeySchema } from "./booking";
-import { applyProviderPayment, cancelPendingPayments, moneySummary, refundAcrossPayments, releaseDepositRow } from "./money";
+import {
+  applyProviderPayment,
+  cancelPendingPayments,
+  lockReservationMoney,
+  moneySummary,
+  netPaidFils,
+  reconcileReservationMoney,
+  refundAcrossPayments,
+  releaseDepositRow,
+} from "./money";
 import { assertCanAccess, buildReservationView, loadReservationRow, type ReservationView } from "./view";
 
 export const cancelReservationSchema = z.object({
@@ -90,6 +99,7 @@ export async function cancelReservation(
       }
     }
   }
+  await reconcileReservationMoney(pre.id);
   return buildReservationView(await loadReservationRow(db, pre.id), now);
 }
 
@@ -105,10 +115,11 @@ export const modifyDatesSchema = z
   .refine((d) => d.returnAt > d.pickupAt, { message: "Return must be after pick-up", path: ["returnAt"] });
 
 /**
- * Changes the dates of a PENDING (unpaid) or CONFIRMED reservation until 48h before pick-up.
- * Re-priced and re-checked for availability inside a transaction that locks the vehicle.
- * A higher price charges the difference first (refunded again if the dates are taken);
- * a lower price refunds the difference.
+ * Changes the dates of a CONFIRMED reservation until 48h before pick-up (BUG-008: a PENDING
+ * reservation must finish or cancel its payment first). Re-priced and re-checked for
+ * availability inside a transaction that locks the vehicle. Runs under the reservation money
+ * lock: a higher price charges only the outstanding difference (refunded if the change fails);
+ * a lower price refunds the surplus via reconciliation.
  */
 export async function modifyReservationDates(
   actor: Actor,
@@ -120,8 +131,10 @@ export async function modifyReservationDates(
   assertCanAccess(actor, r);
   parseInput(rentalWindowSchema, { pickupBranchId: r.pickupBranchId, pickupAt: data.pickupAt, returnAt: data.returnAt });
   assertFuturePickup(data.pickupAt, now);
-  const holdLive = r.status === "PENDING" && !!r.holdExpiresAt && r.holdExpiresAt > now;
-  if (!(r.status === "CONFIRMED" || holdLive)) {
+  if (r.status === "PENDING") {
+    throw new DomainError("INVALID_STATE", "Please finish or cancel the payment first, then change the dates.");
+  }
+  if (r.status !== "CONFIRMED") {
     throw new DomainError("POLICY_VIOLATION", "Only upcoming reservations can be changed.");
   }
   if (!canModifyDates(r.pickupAt, now)) {
@@ -148,73 +161,76 @@ export async function modifyReservationDates(
     throw new DomainError("VEHICLE_UNAVAILABLE", "The vehicle is not available for the new dates.");
   }
 
-  // Charge an increase before changing anything (CONFIRMED only; unpaid holds just re-price).
-  const paid = r.status === "CONFIRMED" ? (await moneySummary(db, r.id)).paidFils : 0;
-  const diff = r.status === "CONFIRMED" ? quote.totalFils - paid : 0;
-  let extraPaymentId: string | undefined;
-  if (diff > 0) {
-    if (!data.paymentMethod) {
-      throw new DomainError("VALIDATION", "The new dates cost more; a payment method is required.", {
-        paymentMethod: ["Required for the price difference"],
-      });
+  await db.transaction(async (lockTx) => {
+    await lockReservationMoney(lockTx, r.id);
+    // Charge only the outstanding difference, computed under the money lock (BUG-008).
+    const diff = quote.totalFils - (await netPaidFils(db, r.id, ["RENTAL", "MODIFICATION"]));
+    let extraPaymentId: string | undefined;
+    if (diff > 0) {
+      if (!data.paymentMethod) {
+        throw new DomainError("VALIDATION", "The new dates cost more; a payment method is required.", {
+          paymentMethod: ["Required for the price difference"],
+        });
+      }
+      extraPaymentId = await chargeDifference(r.id, r.reference, diff, data.paymentMethod, data.idempotencyKey);
     }
-    extraPaymentId = await chargeDifference(r.id, r.reference, diff, data.paymentMethod, data.idempotencyKey);
-  }
 
-  try {
-    await db.transaction(async (tx) => {
-      await tx.select({ id: vehicles.id }).from(vehicles).where(eq(vehicles.id, r.vehicleId)).for("update");
-      const cur = await loadReservationRow(tx, r.id, true);
-      if (cur.status !== r.status) throw new DomainError("CONFLICT", "The reservation changed; please reload.");
-      await expireStaleHolds(tx, r.vehicleId, data.pickupAt, data.returnAt, now);
-      const c = await findConflicts(tx, r.vehicleId, data.pickupAt, data.returnAt, { now, excludeReservationId: r.id });
-      if (c.reservations || c.maintenance) {
-        throw new DomainError("VEHICLE_UNAVAILABLE", "The vehicle is not available for the new dates.");
-      }
-      const fresh = await priceRental(tx, priceInput);
-      await tx
-        .update(reservations)
-        .set({
-          pickupAt: data.pickupAt,
-          returnAt: data.returnAt,
-          dailyRateFils: fresh.quote.dailyRateFils,
-          rentalDays: fresh.quote.rentalDays,
-          rentalFils: fresh.quote.rentalFils,
-          extrasFils: fresh.quote.extrasFils,
-          oneWayFeeFils: fresh.quote.oneWayFeeFils,
-          vatRateBps: fresh.quote.vatRateBps,
-          taxFils: fresh.quote.taxFils,
-          totalFils: fresh.quote.totalFils,
-          updatedAt: now,
-        })
-        .where(eq(reservations.id, r.id));
-      for (const e of fresh.quote.extras) {
+    try {
+      await db.transaction(async (tx) => {
+        await tx.select({ id: vehicles.id }).from(vehicles).where(eq(vehicles.id, r.vehicleId)).for("update");
+        const cur = await loadReservationRow(tx, r.id, true);
+        if (cur.status !== r.status) throw new DomainError("CONFLICT", "The reservation changed; please reload.");
+        await expireStaleHolds(tx, r.vehicleId, data.pickupAt, data.returnAt, now);
+        const c = await findConflicts(tx, r.vehicleId, data.pickupAt, data.returnAt, { now, excludeReservationId: r.id });
+        if (c.reservations || c.maintenance) {
+          throw new DomainError("VEHICLE_UNAVAILABLE", "The vehicle is not available for the new dates.");
+        }
+        const fresh = await priceRental(tx, priceInput);
         await tx
-          .update(reservationExtras)
-          .set({ unitPriceFils: e.unitTotalFils, totalFils: e.totalFils })
-          .where(and(eq(reservationExtras.reservationId, r.id), eq(reservationExtras.extraId, e.extraId)));
-      }
-      await audit(
-        {
-          actor,
-          action: "reservation.dates_changed",
-          entityType: "reservation",
-          entityId: r.id,
-          data: {
-            from: { pickupAt: r.pickupAt, returnAt: r.returnAt, totalFils: r.totalFils },
-            to: { pickupAt: data.pickupAt, returnAt: data.returnAt, totalFils: fresh.quote.totalFils },
+          .update(reservations)
+          .set({
+            pickupAt: data.pickupAt,
+            returnAt: data.returnAt,
+            dailyRateFils: fresh.quote.dailyRateFils,
+            rentalDays: fresh.quote.rentalDays,
+            rentalFils: fresh.quote.rentalFils,
+            extrasFils: fresh.quote.extrasFils,
+            oneWayFeeFils: fresh.quote.oneWayFeeFils,
+            vatRateBps: fresh.quote.vatRateBps,
+            taxFils: fresh.quote.taxFils,
+            totalFils: fresh.quote.totalFils,
+            updatedAt: now,
+          })
+          .where(eq(reservations.id, r.id));
+        for (const e of fresh.quote.extras) {
+          await tx
+            .update(reservationExtras)
+            .set({ unitPriceFils: e.unitTotalFils, totalFils: e.totalFils })
+            .where(and(eq(reservationExtras.reservationId, r.id), eq(reservationExtras.extraId, e.extraId)));
+        }
+        await audit(
+          {
+            actor,
+            action: "reservation.dates_changed",
+            entityType: "reservation",
+            entityId: r.id,
+            data: {
+              from: { pickupAt: r.pickupAt, returnAt: r.returnAt, totalFils: r.totalFils },
+              to: { pickupAt: data.pickupAt, returnAt: data.returnAt, totalFils: fresh.quote.totalFils },
+            },
           },
-        },
-        tx,
-      );
-    });
-  } catch (err) {
-    if (extraPaymentId) await refundPayment(extraPaymentId);
-    if (isExclusionViolation(err)) throw new DomainError("VEHICLE_UNAVAILABLE", "The vehicle is not available for the new dates.");
-    throw err;
-  }
+          tx,
+        );
+      });
+    } catch (err) {
+      if (extraPaymentId) await refundPayment(extraPaymentId);
+      if (isExclusionViolation(err)) throw new DomainError("VEHICLE_UNAVAILABLE", "The vehicle is not available for the new dates.");
+      throw err;
+    }
+  });
 
-  if (diff < 0) await refundAcrossPayments(r.id, -diff);
+  // A cheaper period leaves a surplus: refund it (also covers any success that raced us).
+  await reconcileReservationMoney(r.id);
   return buildReservationView(await loadReservationRow(db, r.id), now);
 }
 

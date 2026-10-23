@@ -165,7 +165,7 @@ export async function createWorld(options: { vehicleCount?: number; deposit?: nu
 /** A valid 17-char VIN (no I/O/Q) derived from a seed. */
 export function vinFor(seed: string): string {
   const clean = seed.toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/g, "Z");
-  return `QAV${clean}${"1234567890ABCDEFGH"}`.slice(0, 17);
+  return `ZAV${clean}${"1234567890ABCDEFGH"}`.slice(0, 17);
 }
 
 /** Whole-hour UTC instant `days` (+hours) from now. */

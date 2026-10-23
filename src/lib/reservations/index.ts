@@ -2,7 +2,7 @@
 // authorization itself (owner or admin; admin-only where noted).
 export { createReservation, getReservation, listMyReservations, generateReference } from "./booking";
 export type { CreateReservationInput } from "./booking";
-export { payReservation, processPaymentWebhook, tryConfirmReservation } from "./payment-flow";
+export { payReservation, payReturnBalance, processPaymentWebhook, tryConfirmReservation } from "./payment-flow";
 export type { PayReservationInput, WebhookResult } from "./payment-flow";
 export { cancelReservation, modifyReservationDates } from "./changes";
 export { listReservations, checkOutReservation, checkInReservation, settleReturnedDeposit } from "./operations";
