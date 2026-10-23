@@ -71,7 +71,11 @@ export async function openMenuIfCollapsed(page: Page) {
 
 /** UI login through the real login page (labels from the App Agent: Email, Password, "Log in"). */
 export async function loginViaUi(page: Page, user: Pick<TestUser, "email" | "password">, path = "/login") {
-  await page.goto(path);
+  // Firefox aborts a goto that races a just-finished client navigation (NS_BINDING_ABORTED); retry once.
+  await page.goto(path).catch(async (err: Error) => {
+    if (!/NS_BINDING_ABORTED|interrupted by another navigation/.test(err.message)) throw err;
+    await page.goto(path);
+  });
   await page.getByRole("textbox", { name: "Email", exact: true }).fill(user.email);
   await page.getByRole("textbox", { name: "Password", exact: true }).fill(user.password);
   await page.getByRole("button", { name: "Log in", exact: true }).click();
@@ -86,6 +90,13 @@ export async function registerViaUi(page: Page, user: TestUser) {
   await page.getByRole("button", { name: "Create account", exact: true }).click();
 }
 
+/** Registration through the UI that must succeed: waits until the app has signed the user in. */
+export async function registerViaUiAndWait(page: Page, user: TestUser) {
+  await registerViaUi(page, user);
+  await expect(page).not.toHaveURL(/\/register/, { timeout: 20_000 });
+  await page.waitForLoadState("networkidle");
+}
+
 export async function logoutViaUi(page: Page) {
   await openMenuIfCollapsed(page);
   await page.getByRole("button", { name: "Log out" }).first().click();
@@ -93,6 +104,8 @@ export async function logoutViaUi(page: Page) {
   await openMenuIfCollapsed(page);
   await expect(page.getByRole("link", { name: "Log in" }).first()).toBeVisible();
   await page.keyboard.press("Escape");
+  // Sign-out refreshes the page; let that navigation finish before the caller navigates.
+  await page.waitForLoadState("networkidle");
 }
 
 export function seedLogin(role: "admin" | "customer") {

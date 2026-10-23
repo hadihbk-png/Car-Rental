@@ -1,5 +1,5 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
-import type { FakePaymentState, FakePaymentStore } from "./fake-store";
+import { withStoreLock, type FakePaymentState, type FakePaymentStore, type WebhookDelivery } from "./fake-store";
 import {
   PaymentError,
   type CreatePaymentInput,
@@ -196,8 +196,7 @@ export class FakePaymentProvider implements PaymentProvider {
     const state = await this.options.store.load();
     const event = state.events.find((e) => e.id === eventId);
     if (!event) throw new PaymentError("not_found", `No event ${eventId}`);
-    await this.deliver([event], 0, state);
-    await this.options.store.save(state);
+    await this.recordDeliveries(await this.deliver([event], 0));
   }
 
   /** Builds the header value the real webhook route will receive. Exposed for tests. */
@@ -210,23 +209,41 @@ export class FakePaymentProvider implements PaymentProvider {
     return createHmac("sha256", this.options.webhookSecret).update(`${timestamp}.${rawBody}`).digest("hex");
   }
 
+  /**
+   * load -> change -> save runs under the store's in-process lock (BUG-011), so concurrent calls
+   * never lose each other's writes. Webhooks are delivered after the lock is released: the
+   * receiving route may call back into this provider (e.g. a refund) in the same process.
+   */
   private async mutate<T>(
     fn: (state: FakePaymentState, emit: (type: WebhookEventType, data: Payment | DepositHold) => void) => T,
   ): Promise<T> {
-    const state = await this.options.store.load();
-    const events: WebhookEvent[] = [];
-    const result = fn(state, (type, data) =>
-      events.push({ id: `evt_${randomUUID()}`, type, createdAt: this.now().toISOString(), data: structuredClone(data) }),
-    );
-    state.events.push(...events);
-    await this.deliver(events, this.options.duplicateWebhooks ?? 0, state);
-    await this.options.store.save(state);
-    return structuredClone(result);
+    const { result, events } = await withStoreLock(this.options.store, async () => {
+      const state = await this.options.store.load();
+      const events: WebhookEvent[] = [];
+      const result = fn(state, (type, data) =>
+        events.push({ id: `evt_${randomUUID()}`, type, createdAt: this.now().toISOString(), data: structuredClone(data) }),
+      );
+      state.events.push(...events);
+      await this.options.store.save(state);
+      return { result: structuredClone(result), events };
+    });
+    await this.recordDeliveries(await this.deliver(events, this.options.duplicateWebhooks ?? 0));
+    return result;
   }
 
-  private async deliver(events: WebhookEvent[], duplicates: number, state: FakePaymentState) {
+  private async recordDeliveries(deliveries: WebhookDelivery[]) {
+    if (!deliveries.length) return;
+    await withStoreLock(this.options.store, async () => {
+      const state = await this.options.store.load();
+      state.deliveries.push(...deliveries);
+      await this.options.store.save(state);
+    });
+  }
+
+  private async deliver(events: WebhookEvent[], duplicates: number): Promise<WebhookDelivery[]> {
     const url = this.options.webhookUrl;
-    if (!url) return;
+    const deliveries: WebhookDelivery[] = [];
+    if (!url) return deliveries;
     for (const event of events) {
       const body = JSON.stringify(event);
       for (let attempt = 1; attempt <= 1 + duplicates; attempt++) {
@@ -237,13 +254,14 @@ export class FakePaymentProvider implements PaymentProvider {
             headers: { "content-type": "application/json", [FAKE_SIGNATURE_HEADER]: this.signatureHeader(body) },
             body,
           });
-          state.deliveries.push({ eventId: event.id, attempt, ok: res.ok, status: res.status, at });
+          deliveries.push({ eventId: event.id, attempt, ok: res.ok, status: res.status, at });
         } catch (err) {
           // The app may not be running (e.g. CLI use). Record it; resendEvent can retry later.
-          state.deliveries.push({ eventId: event.id, attempt, ok: false, error: String(err), at });
+          deliveries.push({ eventId: event.id, attempt, ok: false, error: String(err), at });
         }
       }
     }
+    return deliveries;
   }
 }
 

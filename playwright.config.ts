@@ -62,6 +62,8 @@ export default defineConfig({
       DATABASE_URL_UNPOOLED: qaDb,
       APP_URL: baseURL,
       BETTER_AUTH_URL: baseURL,
+      // Rate limits are per client IP; each test context sends its own x-forwarded-for.
+      AUTH_IP_HEADER: "x-forwarded-for",
       PAYMENT_PROVIDER: "fake",
       FAKE_PAYMENTS_WEBHOOK_URL: `${baseURL}/api/webhooks/payments`,
       FAKE_PAYMENTS_WEBHOOK_DUPLICATES: process.env.E2E_WEBHOOK_DUPLICATES ?? "0",

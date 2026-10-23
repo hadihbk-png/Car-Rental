@@ -144,7 +144,7 @@ test.describe("reservations desk", () => {
 
   test("BUG-005 check-out of the next renter is refused while the previous renter has not returned", async ({ adminPage: page, customer, otherCustomer }) => {
     // First rental [T+1h, T+21h); second starts when it ends, inside the 24h check-out window.
-    const first = scenario<Booked>({ op: "book", email: customer.user.email, pickupInHours: 1, hours: 20, pay: "fake_success" });
+    const first = scenario<Booked>({ op: "book", email: customer.user.email, pickupInHours: 1, hours: 20, pay: "fake_success", freeForHours: 48 });
     const second = scenario<Booked>({ op: "book", email: otherCustomer.user.email, vehicleId: first.vehicleId, pickupInHours: 21, hours: 24, pay: "fake_success" });
     expect(new Date(second.pickupAt).getTime()).toBe(new Date(first.returnAt).getTime());
     scenario({ op: "checkout", reference: first.reference });
@@ -164,10 +164,11 @@ test.describe("reservations desk", () => {
 
   test("FLOW-04/05 check-in late with damage shows the charges; the customer sees them too", async ({ adminPage: page, customer }) => {
     const b = scenario<Booked>({ op: "book", email: customer.user.email, pickupInHours: 2, hours: 24, pay: "fake_success" });
-    scenario({ op: "checkout", reference: b.reference, mileageKm: 70_000 });
+    scenario({ op: "checkout", reference: b.reference }); // at the car's recorded mileage
+    const outKm = await withClient(async (c) => (await c.query("SELECT mileage_km FROM vehicles WHERE id = $1", [b.vehicleId])).rows[0].mileage_km as number);
     await openOrSkip(page, `/admin/check-in?ref=${b.reference}`);
     await expect(page.getByRole("heading", { name: "Return the car" })).toBeVisible();
-    await page.getByLabel("Mileage (km)").fill("70500");
+    await page.getByLabel("Mileage (km)").fill(String(outKm + 500));
     await page.getByLabel("Fuel level").selectOption("6");
     await page.getByLabel("Damage charge").fill("100");
     await page.getByRole("button", { name: "Confirm check-in" }).click();

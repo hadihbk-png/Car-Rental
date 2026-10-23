@@ -24,7 +24,7 @@ const { getPaymentProvider } = await import("../../src/lib/payments");
 type Op =
   | { op: "promote"; email: string }
   | { op: "driver"; email: string }
-  | { op: "book"; email: string; vehicleId?: string; branchCode?: string; pickupInHours: number; hours: number; pay?: "fake_success" | "fake_pending" | "none" }
+  | { op: "book"; email: string; vehicleId?: string; branchCode?: string; pickupInHours: number; hours: number; pay?: "fake_success" | "fake_pending" | "none"; freeForHours?: number }
   | { op: "checkout"; reference: string; mileageKm?: number; fuelLevel?: number; nowOffsetHours?: number }
   | { op: "checkin"; reference: string; mileageKm: number; fuelLevel: number; nowOffsetHours?: number; damageChargeFils?: number }
   | { op: "completePending"; reference: string }
@@ -81,15 +81,22 @@ try {
       const pickupAt = new Date(Math.ceil((Date.now() + input.pickupInHours * 3_600_000) / 3_600_000) * 3_600_000);
       const returnAt = new Date(pickupAt.getTime() + input.hours * 3_600_000);
       if (!vehicleId) {
-        // A car at the branch that is free for the period.
-        const free = await db.execute<{ id: string }>(sql`
-          SELECT v.id FROM vehicles v WHERE v.branch_id = ${branchId} AND v.status IN ('AVAILABLE','RESERVED','ON_RENT')
+        // A car that is free for the period (or a longer window, so a follow-up booking fits too):
+        // the requested branch first, then any branch.
+        const freeUntil = new Date(pickupAt.getTime() + Math.max(input.hours, input.freeForHours ?? 0) * 3_600_000);
+        const free = await db.execute<{ id: string; branch_id: string }>(sql`
+          SELECT v.id, v.branch_id FROM vehicles v
+          JOIN pricing_rules p ON p.is_active AND (p.vehicle_id = v.id OR p.category_id = v.category_id)
+          WHERE v.status IN ('AVAILABLE','RESERVED','ON_RENT')
+            AND (SELECT is_active FROM branches b WHERE b.id = v.branch_id)
             AND NOT EXISTS (SELECT 1 FROM reservations r WHERE r.vehicle_id = v.id AND r.status IN ('PENDING','CONFIRMED','PICKED_UP')
-                 AND r.period && tstzrange(${pickupAt}::timestamptz, ${returnAt}::timestamptz, '[)'))
+                 AND r.period && tstzrange(${pickupAt}::timestamptz, ${freeUntil}::timestamptz, '[)'))
             AND NOT EXISTS (SELECT 1 FROM maintenance_blocks m WHERE m.vehicle_id = v.id
-                 AND m.period && tstzrange(${pickupAt}::timestamptz, ${returnAt}::timestamptz, '[)'))
-          ORDER BY random() LIMIT 1`);
+                 AND m.period && tstzrange(${pickupAt}::timestamptz, ${freeUntil}::timestamptz, '[)'))
+          ORDER BY (v.branch_id = ${branchId}) DESC, random() LIMIT 1`);
+        if (!free.rows[0]) throw new Error("no free car anywhere for this period");
         vehicleId = free.rows[0].id;
+        branchId = free.rows[0].branch_id;
       }
       let v = await res.createReservation(actor, {
         vehicleId, pickupBranchId: branchId, pickupAt, returnAt, extras: [], idempotencyKey: `e2e-${crypto.randomUUID()}`,

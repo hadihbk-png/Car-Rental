@@ -1,5 +1,6 @@
 // CAL-01..03 (vehicle details + availability calendar) and SRCH-10 (branches) in the browser.
 import { expect, test } from "@playwright/test";
+import { expectNotFoundPage } from "../support/not-found";
 import { activeBranches, anyVehicleAt, airportBranch, seededBooking } from "../support/data";
 
 function dubaiDateOf(d: Date) {
@@ -36,9 +37,7 @@ test.describe("vehicle details", () => {
 
   test("CAL-04 an unknown vehicle id shows not-found, not an error", async ({ page }) => {
     for (const path of ["/vehicles/00000000-0000-4000-8000-000000000000", "/vehicles/not-a-uuid"]) {
-      const r = await page.goto(path);
-      expect(r?.status(), path).toBeLessThan(500);
-      await expect(page.getByRole("heading", { name: "We couldn't find that page" })).toBeVisible();
+      await expectNotFoundPage(page, await page.goto(path));
     }
   });
 
@@ -65,9 +64,7 @@ test.describe("branches", () => {
     await expect(page.getByText(first.address).first()).toBeVisible();
   });
 
-  test("SRCH-10b an unknown branch slug is a 404", async ({ page }) => {
-    const r = await page.goto("/branches/no-such-branch-qa");
-    expect(r?.status()).toBeLessThan(500); // BUG-009: soft 404 (HTTP 200) from a streamed notFound()
-    await expect(page.getByRole("heading", { name: "We couldn't find that page" })).toBeVisible();
+  test("SRCH-10b an unknown branch slug shows the not-found page (noindex)", async ({ page }) => {
+    await expectNotFoundPage(page, await page.goto("/branches/no-such-branch-qa"));
   });
 });

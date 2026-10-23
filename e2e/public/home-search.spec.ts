@@ -23,6 +23,13 @@ test.describe("home", () => {
     const airport = await airportBranch();
     const airportLabel = optionTexts.find((t) => t.startsWith(airport.name))!;
     await select.selectOption({ label: airportLabel });
+    // Dates and times are required; submitting without them is blocked by the browser.
+    await form.getByRole("button", { name: "Search cars" }).click();
+    await expect(page).toHaveURL(/localhost:3100\/$/);
+    await form.getByLabel("Pick-up date").fill(dubaiDate(30));
+    await form.getByLabel("Pick-up time").selectOption("10:00");
+    await form.getByLabel("Return date").fill(dubaiDate(32));
+    await form.getByLabel("Return time").selectOption("10:00");
     await form.getByRole("button", { name: "Search cars" }).click();
     await expect(page).toHaveURL(/\/search\?/);
     expect([airport.id, airport.slug]).toContain(new URL(page.url()).searchParams.get("pickupBranch"));
@@ -74,7 +81,8 @@ test.describe("search results", () => {
     const response = await page.goto(searchUrl({ branchId: b.id, from: dubaiDate(33), to: dubaiDate(30) }));
     expect(response?.status()).toBeLessThan(500);
     await expect(page.getByText("We couldn't run this search")).toBeVisible();
-    await expect(page.getByText(/Return must be after pick-up/).filter({ visible: true }).first()).toBeVisible();
+    // BUG-010: the service message and the hint are separate sentences.
+    await expect(page.getByText(/Return must be after pick-up. Adjust the trip/)).toBeVisible();
   });
 
   test("SRCH-08b a past pick-up date and an unknown branch are handled gracefully", async ({ page }) => {

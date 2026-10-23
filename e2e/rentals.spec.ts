@@ -1,6 +1,7 @@
 // FLOW-02, MOD-01/05, CXL in the browser; AZ-01/02 other-user access; balance due after return.
 import { withClient } from "../tests/support/qa-db";
 import { expect, test } from "./support/fixtures";
+import { expectNotFoundPage } from "./support/not-found";
 import { scenario, type Booked } from "./support/scenario";
 
 test.setTimeout(120_000);
@@ -98,13 +99,19 @@ test.describe("my rentals", () => {
 });
 
 test.describe("other users' data", () => {
-  test("AZ-01 another customer cannot open my reservation or voucher (404), even by reference", async ({ customer, otherCustomer }) => {
+  test("AZ-01 another customer cannot open my reservation, voucher or payment page, even by reference", async ({ customer, otherCustomer }) => {
     const b = scenario<Booked>({ op: "book", email: customer.user.email, pickupInHours: 24 * 60, hours: 24, pay: "fake_success" });
-    for (const path of [`/rentals/${b.reference}`, `/rentals/${b.reference}/voucher`, `/book/pay/${b.reference}`]) {
-      const r = await otherCustomer.page.goto(path);
-      expect(r?.status(), path).toBeLessThan(500);
-      await expect(otherCustomer.page.getByRole("heading", { name: "We couldn't find that page" }), path).toBeVisible();
-      await expect(otherCustomer.page.getByText(b.reference)).toHaveCount(0);
+    const { licenceFileUrl } = scenario<{ licenceFileUrl: string }>({ op: "driver", email: customer.user.email });
+    const pending = scenario<Booked>({ op: "book", email: customer.user.email, pickupInHours: 24 * 61, hours: 24, pay: "none" });
+    const leaks = [customer.user.name, customer.user.email, b.id, licenceFileUrl];
+    for (const [path, ref] of [
+      [`/rentals/${b.reference}`, b.reference],
+      [`/rentals/${b.reference}/voucher`, b.reference],
+      [`/book/pay/${pending.reference}`, pending.reference],
+    ]) {
+      // The reference itself is in the URL (and so in canonical/route data); the record's details must not be.
+      await expectNotFoundPage(otherCustomer.page, await otherCustomer.page.goto(path), [...leaks, ref === b.reference ? "DE1." + b.reference : "DE1." + pending.reference]);
+      await expect(otherCustomer.page.getByText(customer.user.name)).toHaveCount(0);
     }
   });
 

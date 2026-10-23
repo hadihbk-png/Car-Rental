@@ -57,9 +57,11 @@ async function reserve(page: Page, t: Awaited<ReturnType<typeof freeTrip>>, opts
     await page.getByLabel(/Full insurance cover/).check();
   }
   const cont = page.getByRole("link", { name: /Continue to driver details/ });
+  // Let the price finish updating (the link is swapped out while a new quote loads).
+  await expect(page.getByText("Updating price…")).toHaveCount(0, { timeout: 20_000 });
   await expect(cont).toBeVisible({ timeout: 20_000 });
   await cont.click();
-  await expect(page).toHaveURL(/\/book\/driver/);
+  await expect(page).toHaveURL(/\/book\/driver/, { timeout: 20_000 });
   if (!opts.driverDone) {
     await fillDriverDetails(page, "E2E Driver");
     await uploadLicence(page);

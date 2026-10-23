@@ -1,6 +1,6 @@
 // AUTH-01..07 in the browser: register, log in, log out, protected pages, safe redirects.
 import { expect, randomClientIp, test } from "./support/fixtures";
-import { loginViaUi, logoutViaUi, newUser, openMenuIfCollapsed, registerViaApi, registerViaUi, seedLogin } from "./support/auth";
+import { loginViaUi, logoutViaUi, newUser, openMenuIfCollapsed, registerViaApi, registerViaUi, registerViaUiAndWait, seedLogin } from "./support/auth";
 
 test.describe("authentication", () => {
   test("AUTH-01/04/06 register through the UI, log out, log back in", async ({ page, baseURL }) => {
@@ -74,7 +74,7 @@ test.describe("authentication", () => {
 
   test("AUTH-07c the login ?next= parameter never redirects off-site", async ({ page }) => {
     const user = newUser();
-    await registerViaUi(page, user);
+    await registerViaUiAndWait(page, user);
     await logoutViaUi(page);
     for (const next of ["//evil.example", "https://evil.example/x", "/\\evil.example"]) {
       await page.setExtraHTTPHeaders({ "x-forwarded-for": randomClientIp() });
