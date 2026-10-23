@@ -68,7 +68,15 @@ export function fakePaymentStore(env: Env = process.env): FakePaymentStore {
     case "netlify-blobs": {
       let store: JsonBlobsStoreLike | undefined;
       return new NetlifyBlobsFakePaymentStore(
-        () => (store ??= getStore({ name: env.NETLIFY_BLOBS_STORE || "driveeasy-files", consistency: "strong" }) as unknown as JsonBlobsStoreLike),
+        () =>
+          (store ??= getStore({
+            name: env.NETLIFY_BLOBS_STORE || "driveeasy-files",
+            consistency: "strong",
+            // Outside Netlify (e.g. seeding from a laptop) credentials must be passed explicitly.
+            ...(env.NETLIFY_BLOBS_SITE_ID && env.NETLIFY_BLOBS_TOKEN
+              ? { siteID: env.NETLIFY_BLOBS_SITE_ID, token: env.NETLIFY_BLOBS_TOKEN }
+              : {}),
+          }) as unknown as JsonBlobsStoreLike),
       );
     }
     default:
