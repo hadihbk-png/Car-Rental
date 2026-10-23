@@ -3,7 +3,7 @@
 [build]
   # Run migrations first when a database is configured (Netlify DB / Neon sets
   # NETLIFY_DATABASE_URL*; a manually added database uses DATABASE_URL*), then build.
-  command = "if [ -n \"$DATABASE_URL_UNPOOLED$DATABASE_URL$NETLIFY_DATABASE_URL_UNPOOLED$NETLIFY_DATABASE_URL\" ]; then node --conditions=react-server --import tsx scripts/db-migrate.mts; else echo 'No database URL set: skipping migrations'; fi && pnpm exec next build"
+  command = "if [ -n \"$DATABASE_URL_UNPOOLED$DATABASE_URL$NETLIFY_DATABASE_URL_UNPOOLED$NETLIFY_DATABASE_URL$NETLIFY_DB_URL\" ]; then node --conditions=react-server --import tsx scripts/db-migrate.mts; else echo 'No database URL set: skipping migrations'; fi && pnpm exec next build"
   publish = ".next"
 
 [build.environment]

@@ -66,9 +66,13 @@ const dbUrl =
   env.NETLIFY_DATABASE_URL_UNPOOLED ||
   env.DATABASE_URL_UNPOOLED ||
   env.NETLIFY_DATABASE_URL ||
+  env.NETLIFY_DB_URL ||
   env.DATABASE_URL;
 if (!dbUrl) {
-  fail("No database found. In Netlify open the site > Extensions > add Netlify DB, then run this script again.");
+  fail(
+    "No database is attached to this site. In Netlify open the site > Data & Storage > Database > " +
+      "Create a database (or Extensions > Neon > connect it to this site), then run this script again.",
+  );
 }
 if (!/^postgres(ql)?:\/\//.test(dbUrl)) {
   fail(
