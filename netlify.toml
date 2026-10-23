@@ -1,0 +1,9 @@
+# Netlify deploy settings. Netlify runs Next.js through its Next.js runtime when the
+# publish directory is .next; without this file it served the repo as a static site (404).
+[build]
+  # Run migrations first when a database is configured (direct URL preferred), then build.
+  command = "if [ -n \"$DATABASE_URL_UNPOOLED$DATABASE_URL\" ]; then node --conditions=react-server --import tsx scripts/db-migrate.mts; else echo 'No DATABASE_URL set: skipping migrations'; fi && pnpm exec next build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "24"
