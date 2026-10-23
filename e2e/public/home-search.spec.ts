@@ -11,17 +11,21 @@ test.describe("home", () => {
     await expect(form).toBeVisible();
     const select = form.getByLabel("Pick-up branch");
     const optionTexts = (await select.locator("option").allTextContents()).map((t) => t.trim()).filter(Boolean);
-    expect(optionTexts.sort()).toEqual((await activeBranches()).map((b) => b.name).sort());
+    // Options read "<branch name>[, <city>]".
+    const names = (await activeBranches()).map((b) => b.name);
+    expect(optionTexts).toHaveLength(names.length);
+    for (const n of names) expect(optionTexts.some((t) => t.startsWith(n)), n).toBe(true);
     // A different return branch is optional and appears on demand.
     await expect(form.getByLabel("Return branch")).toHaveCount(0);
     await form.getByLabel("Return to a different branch").check();
     await expect(form.getByLabel("Return branch")).toBeVisible();
     await form.getByLabel("Return to a different branch").uncheck();
     const airport = await airportBranch();
-    await select.selectOption(airport.id);
+    const airportLabel = optionTexts.find((t) => t.startsWith(airport.name))!;
+    await select.selectOption({ label: airportLabel });
     await form.getByRole("button", { name: "Search cars" }).click();
     await expect(page).toHaveURL(/\/search\?/);
-    expect(new URL(page.url()).searchParams.get("pickupBranch")).toBe(airport.id);
+    expect([airport.id, airport.slug]).toContain(new URL(page.url()).searchParams.get("pickupBranch"));
   });
 });
 
@@ -69,7 +73,8 @@ test.describe("search results", () => {
     const b = await airportBranch();
     const response = await page.goto(searchUrl({ branchId: b.id, from: dubaiDate(33), to: dubaiDate(30) }));
     expect(response?.status()).toBeLessThan(500);
-    await expect(page.getByText(/couldn.t run this search|return must be after|after pick-up/i).first()).toBeVisible();
+    await expect(page.getByText("We couldn't run this search")).toBeVisible();
+    await expect(page.getByText(/Return must be after pick-up/).filter({ visible: true }).first()).toBeVisible();
   });
 
   test("SRCH-08b a past pick-up date and an unknown branch are handled gracefully", async ({ page }) => {

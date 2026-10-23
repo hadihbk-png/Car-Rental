@@ -65,3 +65,30 @@ export class JsonFileFakePaymentStore implements FakePaymentStore {
     await rename(tmp, this.filePath);
   }
 }
+
+/** The subset of a @netlify/blobs Store used by the fake-payment state (injectable for tests). */
+export type JsonBlobsStoreLike = {
+  get(key: string, options: { type: "json" }): Promise<unknown>;
+  setJSON(key: string, data: unknown): Promise<unknown>;
+};
+
+/**
+ * Demo deployments only (FAKE_PAYMENTS_STORE=netlify-blobs): keeps the fake provider's state in
+ * Netlify Blobs because function disks do not persist. Last write wins, which is fine for a demo
+ * with fake money; never use the fake provider for real payments.
+ */
+export class NetlifyBlobsFakePaymentStore implements FakePaymentStore {
+  constructor(
+    private readonly store: () => JsonBlobsStoreLike,
+    private readonly key = "fake-payments/state.json",
+  ) {}
+
+  async load() {
+    const data = (await this.store().get(this.key, { type: "json" })) as FakePaymentState | null;
+    return data ?? emptyFakePaymentState();
+  }
+
+  async save(state: FakePaymentState) {
+    await this.store().setJSON(this.key, state);
+  }
+}

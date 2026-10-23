@@ -32,7 +32,20 @@ type Fixtures = {
 
 type WorkerFixtures = { resetHook: void };
 
+/**
+ * Better Auth rate-limits sign-up/sign-in per client IP (3 per 10 s in production builds). Every
+ * test context presents its own client address, as real users would, so parallel tests do not
+ * share one bucket. (Locally nothing rewrites x-forwarded-for; on Vercel the platform sets it.)
+ */
+export function randomClientIp() {
+  const b = () => 1 + Math.floor(Math.random() * 250);
+  return `10.${b()}.${b()}.${b()}`;
+}
+
 export const test = base.extend<Fixtures, WorkerFixtures>({
+  extraHTTPHeaders: async ({}, provide) => {
+    await provide({ "x-forwarded-for": randomClientIp() });
+  },
   // Reset/seed hook, once per worker. Placeholder until phase B (see ./reset.ts).
   resetHook: [
     async ({}, provide) => {
@@ -68,6 +81,7 @@ export function projectContextOptions(testInfo: TestInfo): BrowserContextOptions
     hasTouch: u.hasTouch,
     locale: u.locale,
     timezoneId: u.timezoneId ?? "Asia/Dubai",
+    extraHTTPHeaders: { "x-forwarded-for": randomClientIp() },
   };
 }
 

@@ -1,9 +1,10 @@
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import * as schema from "./schema";
+import { appDatabaseUrl } from "./urls";
 
-// node-postgres for both local PostgreSQL and Neon. In production DATABASE_URL is Neon's
-// pooled URL; interactive transactions with SELECT ... FOR UPDATE need a real connection,
+// node-postgres for both local PostgreSQL and Neon. In production the URL is Neon's pooled URL
+// (DATABASE_URL on Vercel, NETLIFY_DATABASE_URL on Netlify DB; see ./urls.ts); interactive transactions with SELECT ... FOR UPDATE need a real connection,
 // so the Neon HTTP driver is deliberately not used.
 
 export type Db = NodePgDatabase<typeof schema>;
@@ -15,7 +16,7 @@ const globalForDb = globalThis as unknown as { driveEasyPool?: Pool; driveEasyDb
 
 function createPool() {
   const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
+    connectionString: appDatabaseUrl(),
     max: Number(process.env.DATABASE_POOL_MAX ?? 10),
     idleTimeoutMillis: 10_000,
   });

@@ -181,9 +181,18 @@ test("CON-08 two customers pay for the same car and dates at the same time: exac
     customer.page.getByRole("button", { name: "Reserve and continue to payment" }).click(),
     otherCustomer.page.getByRole("button", { name: "Reserve and continue to payment" }).click(),
   ]);
-  await Promise.all([customer.page.waitForLoadState("networkidle"), otherCustomer.page.waitForLoadState("networkidle")]);
-  const onPay = [customer.page, otherCustomer.page].filter((p) => /\/book\/pay\//.test(p.url()));
-  expect(onPay).toHaveLength(1);
+  const pages = [customer.page, otherCustomer.page];
+  // Wait until both have finished: one navigates to /book/pay, the other shows the refusal.
+  await expect
+    .poll(
+      async () => {
+        const paying = pages.filter((p) => /\/book\/pay\//.test(p.url())).length;
+        const refused = (await Promise.all(pages.map((p) => p.getByText(/no longer available/i).count()))).filter((n) => n > 0).length;
+        return paying + refused >= 2 ? paying : -1;
+      },
+      { timeout: 30_000 },
+    )
+    .toBe(1);
   const loser = [customer.page, otherCustomer.page].find((p) => !/\/book\/pay\//.test(p.url()))!;
   await expect(loser.getByText(/no longer available/i).first()).toBeVisible();
   const active = await withClient(async (c) =>

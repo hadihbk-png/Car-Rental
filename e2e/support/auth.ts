@@ -72,23 +72,27 @@ export async function openMenuIfCollapsed(page: Page) {
 /** UI login through the real login page (labels from the App Agent: Email, Password, "Log in"). */
 export async function loginViaUi(page: Page, user: Pick<TestUser, "email" | "password">, path = "/login") {
   await page.goto(path);
-  await page.getByLabel("Email", { exact: true }).fill(user.email);
-  await page.getByLabel("Password", { exact: true }).fill(user.password);
+  await page.getByRole("textbox", { name: "Email", exact: true }).fill(user.email);
+  await page.getByRole("textbox", { name: "Password", exact: true }).fill(user.password);
   await page.getByRole("button", { name: "Log in", exact: true }).click();
 }
 
 /** UI registration (labels: Full name, Email, Password, "Create account"). */
 export async function registerViaUi(page: Page, user: TestUser) {
   await page.goto("/register");
-  await page.getByLabel("Full name", { exact: true }).fill(user.name);
-  await page.getByLabel("Email", { exact: true }).fill(user.email);
-  await page.getByLabel("Password", { exact: true }).fill(user.password);
+  await page.getByRole("textbox", { name: "Full name", exact: true }).fill(user.name);
+  await page.getByRole("textbox", { name: "Email", exact: true }).fill(user.email);
+  await page.getByRole("textbox", { name: "Password", exact: true }).fill(user.password);
   await page.getByRole("button", { name: "Create account", exact: true }).click();
 }
 
 export async function logoutViaUi(page: Page) {
   await openMenuIfCollapsed(page);
   await page.getByRole("button", { name: "Log out" }).first().click();
+  // Wait until signed out (the header shows "Log in" again) before the next navigation.
+  await openMenuIfCollapsed(page);
+  await expect(page.getByRole("link", { name: "Log in" }).first()).toBeVisible();
+  await page.keyboard.press("Escape");
 }
 
 export function seedLogin(role: "admin" | "customer") {

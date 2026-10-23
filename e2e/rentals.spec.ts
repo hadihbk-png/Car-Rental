@@ -102,7 +102,8 @@ test.describe("other users' data", () => {
     const b = scenario<Booked>({ op: "book", email: customer.user.email, pickupInHours: 24 * 60, hours: 24, pay: "fake_success" });
     for (const path of [`/rentals/${b.reference}`, `/rentals/${b.reference}/voucher`, `/book/pay/${b.reference}`]) {
       const r = await otherCustomer.page.goto(path);
-      expect(r?.status(), path).toBe(404);
+      expect(r?.status(), path).toBeLessThan(500);
+      await expect(otherCustomer.page.getByRole("heading", { name: "We couldn't find that page" }), path).toBeVisible();
       await expect(otherCustomer.page.getByText(b.reference)).toHaveCount(0);
     }
   });

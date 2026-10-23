@@ -27,7 +27,10 @@ test.describe("access", () => {
   test("AZ-06 a customer is turned away from every admin page", async ({ customerPage: page }) => {
     for (const path of ADMIN_PAGES) {
       await page.goto(path);
-      expect(new URL(page.url()).pathname, path).not.toMatch(/^\/admin/);
+      // The redirect may arrive in the streamed response, so wait for the URL to change, and make
+      // sure no admin UI is rendered either way.
+      await expect(page.getByRole("navigation", { name: "Admin" }), path).toHaveCount(0);
+      await expect(page, path).not.toHaveURL(/\/admin/);
     }
   });
 
@@ -75,13 +78,14 @@ test.describe("fleet, branches and pricing", () => {
   test("AZ-12 a maintenance block over a confirmed booking is refused", async ({ adminPage: page, customer }) => {
     const b = scenario<Booked>({ op: "book", email: customer.user.email, pickupInHours: 24 * 90, hours: 48, pay: "fake_success" });
     await page.goto(`/admin/fleet/${b.vehicleId}`);
-    const start = new Date(new Date(b.pickupAt).getTime() + 4 * 3_600_000);
+    // The day after pick-up is fully inside the 48h booking (09:00-18:00 block always overlaps).
+    const start = new Date(new Date(b.pickupAt).getTime() + 24 * 3_600_000 + 4 * 3_600_000);
     const day = start.toISOString().slice(0, 10);
     await page.getByLabel("Start date").fill(day);
     await page.getByLabel("End date").fill(day);
     await page.getByLabel("Reason").fill("E2E service");
     await page.getByRole("button", { name: "Add maintenance block" }).click();
-    await expect(page.getByText(/reservation|not available|booked/i).first()).toBeVisible();
+    await expect(page.getByText(/has a reservation or maintenance block/).first()).toBeVisible();
     const blocks = await withClient(async (c) => (await c.query("SELECT count(*)::int AS n FROM maintenance_blocks WHERE vehicle_id = $1 AND reason = 'E2E service'", [b.vehicleId])).rows[0].n);
     expect(blocks).toBe(0);
   });
@@ -139,13 +143,15 @@ test.describe("reservations desk", () => {
   });
 
   test("BUG-005 check-out of the next renter is refused while the previous renter has not returned", async ({ adminPage: page, customer, otherCustomer }) => {
-    const first = scenario<Booked>({ op: "book", email: customer.user.email, pickupInHours: 2, hours: 24, pay: "fake_success" });
-    const second = scenario<Booked>({ op: "book", email: otherCustomer.user.email, vehicleId: first.vehicleId, pickupInHours: 2 + 24, hours: 24, pay: "fake_success" });
+    // First rental [T+1h, T+21h); second starts when it ends, inside the 24h check-out window.
+    const first = scenario<Booked>({ op: "book", email: customer.user.email, pickupInHours: 1, hours: 20, pay: "fake_success" });
+    const second = scenario<Booked>({ op: "book", email: otherCustomer.user.email, vehicleId: first.vehicleId, pickupInHours: 21, hours: 24, pay: "fake_success" });
+    expect(new Date(second.pickupAt).getTime()).toBe(new Date(first.returnAt).getTime());
     scenario({ op: "checkout", reference: first.reference });
     // Simulated: the next pick-up is due now but the first renter is late (not checked in).
     let refused = false;
     try {
-      scenario({ op: "checkout", reference: second.reference, nowOffsetHours: 24.5 });
+      scenario({ op: "checkout", reference: second.reference, nowOffsetHours: 20.5 });
     } catch {
       refused = true;
     }

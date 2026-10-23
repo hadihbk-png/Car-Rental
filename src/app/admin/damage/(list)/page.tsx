@@ -13,8 +13,8 @@ import { Checkbox, Select } from "@/components/ui/form-controls";
 import { AlertTriangleIcon } from "@/components/ui/icons";
 import { PageHeader } from "@/components/ui/page-header";
 import { DataTable } from "@/components/ui/table";
-import { requireAdminPage } from "../_lib/auth";
-import { SEVERITY_TONE, STAGE_LABEL } from "./_lib";
+import { requireAdminPage } from "../../_lib/auth";
+import { SEVERITY_TONE, STAGE_LABEL } from "../_lib";
 
 export const metadata: Metadata = { title: "Damage reports" };
 

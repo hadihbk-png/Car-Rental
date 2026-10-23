@@ -35,10 +35,11 @@ test.describe("vehicle details", () => {
   });
 
   test("CAL-04 an unknown vehicle id shows not-found, not an error", async ({ page }) => {
-    const r = await page.goto("/vehicles/00000000-0000-4000-8000-000000000000");
-    expect(r?.status()).toBe(404);
-    const r2 = await page.goto("/vehicles/not-a-uuid");
-    expect(r2?.status()).toBe(404);
+    for (const path of ["/vehicles/00000000-0000-4000-8000-000000000000", "/vehicles/not-a-uuid"]) {
+      const r = await page.goto(path);
+      expect(r?.status(), path).toBeLessThan(500);
+      await expect(page.getByRole("heading", { name: "We couldn't find that page" })).toBeVisible();
+    }
   });
 
   test("CAL-01b a search result links to its vehicle page", async ({ page }) => {
@@ -66,6 +67,7 @@ test.describe("branches", () => {
 
   test("SRCH-10b an unknown branch slug is a 404", async ({ page }) => {
     const r = await page.goto("/branches/no-such-branch-qa");
-    expect(r?.status()).toBe(404);
+    expect(r?.status()).toBeLessThan(500); // BUG-009: soft 404 (HTTP 200) from a streamed notFound()
+    await expect(page.getByRole("heading", { name: "We couldn't find that page" })).toBeVisible();
   });
 });

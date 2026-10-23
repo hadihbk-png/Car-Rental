@@ -78,3 +78,8 @@ All services are server-only. The first argument is the `Actor` from `requireUse
 - `GET|POST /api/cron/release-expired-holds` (Bearer CRON_SECRET).
 - `/api/files/public/<key>`, `/api/files/licences/[profileId]` (owner/admin), `/api/files/damage/[reportId]/[index]` (admin).
 - Server actions that receive files pass `new Uint8Array(await file.arrayBuffer())` and `file.type`.
+
+## Platforms (Vercel and Netlify; selected by settings only)
+- Nothing changes for pages: always use `photoUrls`, `licenceFileUrl` and `imageUrls` from the services. They point at the `/api/files/...` routes on every platform (Netlify Blobs has no public URLs, so photos are served through `/api/files/public/...` there too).
+- Scheduled cleanup: Vercel Cron (`vercel.json`) or the Netlify scheduled function `netlify/functions/release-expired-holds.mts` (every 5 minutes); both call the cron route with `Bearer CRON_SECRET`.
+- Configuration errors are thrown on first use (not at import) when a setting cannot work on the platform: `STORAGE_DRIVER=local` / `FAKE_PAYMENTS_STORE=file` on Netlify, or `PAYMENT_PROVIDER=fake` in a deployed production build without `ALLOW_FAKE_PAYMENTS=true`. The error message names the setting to change.

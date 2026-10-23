@@ -13,7 +13,7 @@ import { ClipboardIcon, SearchIcon } from "@/components/ui/icons";
 import { PageHeader } from "@/components/ui/page-header";
 import { Pagination } from "@/components/ui/pagination";
 import { DataTable } from "@/components/ui/table";
-import { requireAdminPage } from "../_lib/auth";
+import { requireAdminPage } from "../../_lib/auth";
 
 export const metadata: Metadata = { title: "Reservations" };
 

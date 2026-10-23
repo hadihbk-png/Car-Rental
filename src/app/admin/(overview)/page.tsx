@@ -8,8 +8,8 @@ import { StatusBadge, statusPresentation } from "@/components/ui/badge";
 import { buttonClasses } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
-import { requireAdminPage } from "./_lib/auth";
-import { VEHICLE_STATUSES } from "./fleet/vehicle-form";
+import { requireAdminPage } from "../_lib/auth";
+import { VEHICLE_STATUSES } from "../fleet/vehicle-form";
 
 export const metadata: Metadata = { title: "Overview" };
 

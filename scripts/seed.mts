@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { hashPassword } from "better-auth/crypto";
 import { and, eq, sql } from "drizzle-orm";
 import { db, pool } from "../src/db";
+import { appDatabaseUrl, databaseNameOf } from "../src/db/urls";
 import {
   accounts,
   branches,
@@ -41,7 +42,12 @@ function required(key: string): string {
   return v;
 }
 
-const dbName = new URL(required("DATABASE_URL")).pathname.slice(1);
+const seedUrl = appDatabaseUrl();
+if (!seedUrl) {
+  console.error("DATABASE_URL (or NETLIFY_DATABASE_URL) is not set (see .env.example).");
+  process.exit(1);
+}
+const dbName = databaseNameOf(seedUrl);
 const adminEmail = (process.env.SEED_ADMIN_EMAIL || "admin@driveeasy.test").toLowerCase();
 const customerEmail = (process.env.SEED_CUSTOMER_EMAIL || "customer@driveeasy.test").toLowerCase();
 const adminPassword = required("SEED_ADMIN_PASSWORD");

@@ -11,8 +11,8 @@ import { Input, Select } from "@/components/ui/form-controls";
 import { CarIcon, SearchIcon } from "@/components/ui/icons";
 import { PageHeader } from "@/components/ui/page-header";
 import { DataTable } from "@/components/ui/table";
-import { requireAdminPage } from "../_lib/auth";
-import { VEHICLE_STATUSES } from "./vehicle-form";
+import { requireAdminPage } from "../../_lib/auth";
+import { VEHICLE_STATUSES } from "../vehicle-form";
 
 export const metadata: Metadata = { title: "Fleet" };
 

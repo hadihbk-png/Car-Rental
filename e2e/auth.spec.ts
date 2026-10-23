@@ -1,5 +1,5 @@
 // AUTH-01..07 in the browser: register, log in, log out, protected pages, safe redirects.
-import { expect, test } from "@playwright/test";
+import { expect, randomClientIp, test } from "./support/fixtures";
 import { loginViaUi, logoutViaUi, newUser, openMenuIfCollapsed, registerViaApi, registerViaUi, seedLogin } from "./support/auth";
 
 test.describe("authentication", () => {
@@ -28,16 +28,16 @@ test.describe("authentication", () => {
     await page.context().clearCookies();
     await registerViaUi(page, user);
     await expect(page).toHaveURL(/\/register/);
-    await expect(page.locator("#register-error")).toBeVisible();
+    await expect(page.getByText("An account with this email already exists. Log in instead.")).toBeVisible();
   });
 
   test("AUTH-03 client-side validation: empty fields, bad email, short password", async ({ page }) => {
     await page.goto("/register");
     await page.getByRole("button", { name: "Create account", exact: true }).click();
     await expect(page.getByText("Enter your full name.")).toBeVisible();
-    await page.getByLabel("Full name", { exact: true }).fill("QA");
-    await page.getByLabel("Email", { exact: true }).fill("not-an-email");
-    await page.getByLabel("Password", { exact: true }).fill("short");
+    await page.getByRole("textbox", { name: "Full name", exact: true }).fill("QA");
+    await page.getByRole("textbox", { name: "Email", exact: true }).fill("not-an-email");
+    await page.getByRole("textbox", { name: "Password", exact: true }).fill("short");
     await page.getByRole("button", { name: "Create account", exact: true }).click();
     await expect(page.getByText(/valid email address/)).toBeVisible();
     await expect(page.getByText(/at least 8 characters/)).toBeVisible();
@@ -77,7 +77,9 @@ test.describe("authentication", () => {
     await registerViaUi(page, user);
     await logoutViaUi(page);
     for (const next of ["//evil.example", "https://evil.example/x", "/\\evil.example"]) {
+      await page.setExtraHTTPHeaders({ "x-forwarded-for": randomClientIp() });
       await loginViaUi(page, user, `/login?next=${encodeURIComponent(next)}`);
+      await expect(page).not.toHaveURL(/\/login/);
       await expect(page).toHaveURL(/^http:\/\/localhost:3100\//);
       await logoutViaUi(page);
     }

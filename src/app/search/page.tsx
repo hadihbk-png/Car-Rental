@@ -156,7 +156,7 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
         <section aria-label="Search results" className="flex min-w-0 flex-col gap-4">
           {problem && (
             <Notice tone="error" title="We couldn't run this search" live>
-              {problem} Adjust the trip details in the filters and try again.
+              {/[.!?]$/.test(problem) ? problem : `${problem}.`} Adjust the trip details in the filters and try again.
             </Notice>
           )}
           {trip.partialDates && !problem && (

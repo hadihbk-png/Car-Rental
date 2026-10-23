@@ -8,7 +8,7 @@ import { MapPinIcon } from "@/components/ui/icons";
 import { Notice } from "@/components/ui/notice";
 import { PageHeader } from "@/components/ui/page-header";
 import { DataTable } from "@/components/ui/table";
-import { requireAdminPage } from "../_lib/auth";
+import { requireAdminPage } from "../../_lib/auth";
 
 export const metadata: Metadata = { title: "Branches" };
 
