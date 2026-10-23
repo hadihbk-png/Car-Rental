@@ -197,6 +197,6 @@ Set separate values for Preview and Production in Vercel. Secrets never get a `N
 - **A failed validation check still ran the next one**, which crashed with a raw `RangeError` instead of a field error. Fix: guard dependent checks.
 - **Double charge:** a pending payment was followed by a successful retry, and then the first payment also succeeded. Fix: cancel earlier pending attempts, and refund any payment that arrives once the booking is already paid.
 - **A date change while a payment was pending** left the booking stuck, and paying again charged the full total. Fix: allow date changes only when confirmed, and always charge only the outstanding amount.
-- **Back-to-back hand-over while the previous renter was still out** (a late return). Fix: refuse check-out while the resource is out, and set its status from its real state at check-in. *(Not yet retested.)*
-- **Return charges above the deposit were recorded but never collected.** Fix: record them as a balance due that the customer can pay, with an admin filter. *(Not yet retested.)*
+- **Back-to-back hand-over while the previous renter was still out** (a late return). Fix: refuse check-out while the resource is out, and set its status from its real state at check-in.
+- **Return charges above the deposit were recorded but never collected.** Fix: record them as a balance due that the customer can pay, with an admin filter.
 - **Separate databases per agent** prevented flaky collisions. A guard test keeps the plain `pnpm test` from ever touching a database.
